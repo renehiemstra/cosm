@@ -63,9 +63,10 @@ func checkOutput(t *testing.T, stdout, stderr, expectedOutput string, err error,
 
 // setupRegistriesFile creates a registries.json with given registries
 func setupRegistriesFile(t *testing.T, dir string, registries []struct {
-	Name        string    `json:"name"`
-	GitURL      string    `json:"giturl"`
-	LastUpdated time.Time `json:"last_updated,omitempty"`
+	Name        string              `json:"name"`
+	GitURL      string              `json:"giturl"`
+	Packages    map[string][]string `json:"packages,omitempty"`
+	LastUpdated time.Time           `json:"last_updated,omitempty"`
 }) string {
 	t.Helper()
 	cosmDir := filepath.Join(dir, ".cosm")
@@ -85,9 +86,10 @@ func setupRegistriesFile(t *testing.T, dir string, registries []struct {
 
 // checkRegistriesFile verifies the contents of registries.json
 func checkRegistriesFile(t *testing.T, file string, expected []struct {
-	Name        string    `json:"name"`
-	GitURL      string    `json:"giturl"`
-	LastUpdated time.Time `json:"last_updated,omitempty"`
+	Name        string              `json:"name"`
+	GitURL      string              `json:"giturl"`
+	Packages    map[string][]string `json:"packages,omitempty"`
+	LastUpdated time.Time           `json:"last_updated,omitempty"`
 }) {
 	t.Helper()
 	data, err := os.ReadFile(file)
@@ -95,9 +97,10 @@ func checkRegistriesFile(t *testing.T, file string, expected []struct {
 		t.Fatalf("Failed to read registries.json: %v", err)
 	}
 	var registries []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
 	}
 	if err := json.Unmarshal(data, &registries); err != nil {
 		t.Fatalf("Failed to parse registries.json: %v", err)
@@ -114,8 +117,26 @@ func checkRegistriesFile(t *testing.T, file string, expected []struct {
 			t.Errorf("Expected registry %d: {Name: %q, GitURL: %q}, got {Name: %q, GitURL: %q}",
 				i, exp.Name, exp.GitURL, got.Name, got.GitURL)
 		}
+		if len(got.Packages) != len(exp.Packages) {
+			t.Errorf("Expected %d packages for %s, got %d", len(exp.Packages), exp.Name, len(got.Packages))
+		}
+		for pkgName, expVersions := range exp.Packages {
+			gotVersions, exists := got.Packages[pkgName]
+			if !exists {
+				t.Errorf("Package %s not found in registry %s", pkgName, exp.Name)
+				continue
+			}
+			if len(gotVersions) != len(expVersions) {
+				t.Errorf("Expected %d versions for %s in %s, got %d", len(expVersions), pkgName, exp.Name, len(gotVersions))
+			}
+			for j, v := range expVersions {
+				if j >= len(gotVersions) || gotVersions[j] != v {
+					t.Errorf("Expected version %d for %s in %s: %q, got %q", j, pkgName, exp.Name, v, gotVersions[j])
+				}
+			}
+		}
 		if !exp.LastUpdated.IsZero() && got.LastUpdated.IsZero() {
-			t.Errorf("Expected registry %d to have a LastUpdated time, got zero", i)
+			t.Errorf("Expected LastUpdated to be set for %s, got zero", exp.Name)
 		}
 	}
 }
@@ -167,10 +188,11 @@ func TestRegistryInit(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Initialized registry '%s' with Git URL: %s\n", registryName, gitURL), err, false, 0)
 
 	checkRegistriesFile(t, filepath.Join(tempDir, ".cosm", "registries.json"), []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL}})
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
 }
 
 func TestRegistryInitDuplicate(t *testing.T) {
@@ -178,10 +200,11 @@ func TestRegistryInitDuplicate(t *testing.T) {
 	registryName := "myreg"
 	gitURL := "https://git.example.com"
 	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL}})
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
 	dataBefore, _ := os.ReadFile(registriesFile)
 
 	stdout, _, err := runCommand(t, tempDir, "registry", "init", registryName, gitURL)
@@ -202,10 +225,11 @@ func TestRegistryClone(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Cloned registry '%s' from %s\n", expectedName, gitURL), err, false, 0)
 
 	checkRegistriesFile(t, filepath.Join(tempDir, ".cosm", "registries.json"), []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
-	}{{Name: expectedName, GitURL: gitURL}})
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: expectedName, GitURL: gitURL, Packages: make(map[string][]string)}})
 }
 
 func TestRegistryCloneDuplicate(t *testing.T) {
@@ -213,10 +237,11 @@ func TestRegistryCloneDuplicate(t *testing.T) {
 	gitURL := "https://git.example.com/myreg.git"
 	registryName := "myreg.git"
 	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL}})
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
 	dataBefore, _ := os.ReadFile(registriesFile)
 
 	stdout, _, err := runCommand(t, tempDir, "registry", "clone", gitURL)
@@ -233,18 +258,20 @@ func TestRegistryDelete(t *testing.T) {
 	registryName := "myreg"
 	gitURL := "https://git.example.com"
 	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL}})
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
 
 	stdout, _, err := runCommand(t, tempDir, "registry", "delete", registryName)
 	checkOutput(t, stdout, "", fmt.Sprintf("Deleted registry '%s'\n", registryName), err, false, 0)
 
 	checkRegistriesFile(t, registriesFile, []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
 	}{})
 }
 
@@ -253,18 +280,20 @@ func TestRegistryDeleteForce(t *testing.T) {
 	registryName := "myreg"
 	gitURL := "https://git.example.com"
 	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL}})
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
 
 	stdout, _, err := runCommand(t, tempDir, "registry", "delete", registryName, "--force")
 	checkOutput(t, stdout, "", fmt.Sprintf("Force deleted registry '%s'\n", registryName), err, false, 0)
 
 	checkRegistriesFile(t, registriesFile, []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
 	}{})
 }
 
@@ -273,10 +302,11 @@ func TestRegistryDeleteNotFound(t *testing.T) {
 	registryName := "myreg"
 	gitURL := "https://git.example.com"
 	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
-	}{{Name: "otherreg", GitURL: gitURL}})
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: "otherreg", GitURL: gitURL, Packages: make(map[string][]string)}})
 	dataBefore, _ := os.ReadFile(registriesFile)
 
 	stdout, _, err := runCommand(t, tempDir, "registry", "delete", registryName)
@@ -293,23 +323,24 @@ func TestRegistryUpdate(t *testing.T) {
 	registryName := "myreg"
 	gitURL := "https://git.example.com"
 	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL}})
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
 
 	stdout, _, err := runCommand(t, tempDir, "registry", "update", registryName)
 	checkOutput(t, stdout, "", fmt.Sprintf("Updated registry '%s'\n", registryName), err, false, 0)
 
-	// Check that LastUpdated is set
 	data, err := os.ReadFile(registriesFile)
 	if err != nil {
 		t.Fatalf("Failed to read registries.json: %v", err)
 	}
 	var registries []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
 	}
 	if err := json.Unmarshal(data, &registries); err != nil {
 		t.Fatalf("Failed to parse registries.json: %v", err)
@@ -327,14 +358,254 @@ func TestRegistryUpdateNotFound(t *testing.T) {
 	registryName := "myreg"
 	gitURL := "https://git.example.com"
 	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string    `json:"name"`
-		GitURL      string    `json:"giturl"`
-		LastUpdated time.Time `json:"last_updated,omitempty"`
-	}{{Name: "otherreg", GitURL: gitURL}})
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: "otherreg", GitURL: gitURL, Packages: make(map[string][]string)}})
 	dataBefore, _ := os.ReadFile(registriesFile)
 
 	stdout, _, err := runCommand(t, tempDir, "registry", "update", registryName)
 	checkOutput(t, stdout, "", fmt.Sprintf("Error: Registry '%s' not found\n", registryName), err, true, 1)
+
+	dataAfter, _ := os.ReadFile(registriesFile)
+	if !bytes.Equal(dataBefore, dataAfter) {
+		t.Errorf("registries.json changed unexpectedly")
+	}
+}
+
+func TestRegistryUpdateAll(t *testing.T) {
+	tempDir := t.TempDir()
+	registriesFile := setupRegistriesFile(t, tempDir, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{
+		{Name: "reg1", GitURL: "https://git.example.com/reg1", Packages: make(map[string][]string)},
+		{Name: "reg2", GitURL: "https://git.example.com/reg2", Packages: make(map[string][]string)},
+	})
+
+	stdout, _, err := runCommand(t, tempDir, "registry", "update", "--all")
+	checkOutput(t, stdout, "", "Updated all registries\n", err, false, 0)
+
+	data, err := os.ReadFile(registriesFile)
+	if err != nil {
+		t.Fatalf("Failed to read registries.json: %v", err)
+	}
+	var registries []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}
+	if err := json.Unmarshal(data, &registries); err != nil {
+		t.Fatalf("Failed to parse registries.json: %v", err)
+	}
+	if len(registries) != 2 {
+		t.Errorf("Expected 2 registries, got %d", len(registries))
+	}
+	for _, reg := range registries {
+		if reg.LastUpdated.IsZero() {
+			t.Errorf("Expected LastUpdated to be set for %s, got zero", reg.Name)
+		}
+	}
+}
+
+func TestRegistryAddNew(t *testing.T) {
+	tempDir := t.TempDir()
+	registryName := "myreg"
+	versionTag := "v1.0.0"
+	gitURL := "https://git.example.com/myreg"
+
+	stdout, _, err := runCommand(t, tempDir, "registry", "add", registryName, versionTag, gitURL)
+	checkOutput(t, stdout, "", fmt.Sprintf("Added version '%s' to registry '%s' from %s\n", versionTag, registryName, gitURL), err, false, 0)
+
+	checkRegistriesFile(t, filepath.Join(tempDir, ".cosm", "registries.json"), []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{"pkg": {versionTag}}}})
+}
+
+func TestRegistryAddExisting(t *testing.T) {
+	tempDir := t.TempDir()
+	registryName := "myreg"
+	versionTag := "v1.0.0"
+	gitURL := "https://git.example.com/myreg"
+	registriesFile := setupRegistriesFile(t, tempDir, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: "https://old.git.example.com", Packages: make(map[string][]string)}})
+
+	stdout, _, err := runCommand(t, tempDir, "registry", "add", registryName, versionTag, gitURL)
+	checkOutput(t, stdout, "", fmt.Sprintf("Added version '%s' to registry '%s' from %s\n", versionTag, registryName, gitURL), err, false, 0)
+
+	checkRegistriesFile(t, registriesFile, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{"pkg": {versionTag}}}})
+}
+
+func TestRegistryAddDuplicateVersion(t *testing.T) {
+	tempDir := t.TempDir()
+	registryName := "myreg"
+	versionTag := "v1.0.0"
+	gitURL := "https://git.example.com/myreg"
+	registriesFile := setupRegistriesFile(t, tempDir, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{"pkg": {versionTag}}}})
+	dataBefore, _ := os.ReadFile(registriesFile)
+
+	stdout, _, err := runCommand(t, tempDir, "registry", "add", registryName, versionTag, gitURL)
+	checkOutput(t, stdout, "", fmt.Sprintf("Error: Version '%s' already exists in registry '%s' for package 'pkg'\n", versionTag, registryName), err, true, 1)
+
+	dataAfter, _ := os.ReadFile(registriesFile)
+	if !bytes.Equal(dataBefore, dataAfter) {
+		t.Errorf("registries.json changed unexpectedly")
+	}
+}
+
+func TestRegistryRmVersion(t *testing.T) {
+	tempDir := t.TempDir()
+	registryName := "myreg"
+	packageName := "mypkg"
+	versionTag := "v1.0.0"
+	gitURL := "https://git.example.com/myreg"
+	registriesFile := setupRegistriesFile(t, tempDir, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {versionTag, "v1.1.0"}}}})
+
+	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName, versionTag)
+	checkOutput(t, stdout, "", fmt.Sprintf("Removed version '%s' from package '%s' in registry '%s'\n", versionTag, packageName, registryName), err, false, 0)
+
+	checkRegistriesFile(t, registriesFile, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {"v1.1.0"}}}})
+}
+
+func TestRegistryRmVersionForce(t *testing.T) {
+	tempDir := t.TempDir()
+	registryName := "myreg"
+	packageName := "mypkg"
+	versionTag := "v1.0.0"
+	gitURL := "https://git.example.com/myreg"
+	registriesFile := setupRegistriesFile(t, tempDir, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {versionTag, "v1.1.0"}}}})
+
+	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName, versionTag, "--force")
+	checkOutput(t, stdout, "", fmt.Sprintf("Force removed version '%s' from package '%s' in registry '%s'\n", versionTag, packageName, registryName), err, false, 0)
+
+	checkRegistriesFile(t, registriesFile, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {"v1.1.0"}}}})
+}
+
+func TestRegistryRmPackage(t *testing.T) {
+	tempDir := t.TempDir()
+	registryName := "myreg"
+	packageName := "mypkg"
+	gitURL := "https://git.example.com/myreg"
+	registriesFile := setupRegistriesFile(t, tempDir, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {"v1.0.0", "v1.1.0"}, "otherpkg": {"v2.0.0"}}}})
+
+	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName)
+	checkOutput(t, stdout, "", fmt.Sprintf("Removed package '%s' from registry '%s'\n", packageName, registryName), err, false, 0)
+
+	checkRegistriesFile(t, registriesFile, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{"otherpkg": {"v2.0.0"}}}})
+}
+
+func TestRegistryRmPackageForce(t *testing.T) {
+	tempDir := t.TempDir()
+	registryName := "myreg"
+	packageName := "mypkg"
+	gitURL := "https://git.example.com/myreg"
+	registriesFile := setupRegistriesFile(t, tempDir, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {"v1.0.0", "v1.1.0"}, "otherpkg": {"v2.0.0"}}}})
+
+	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName, "--force")
+	checkOutput(t, stdout, "", fmt.Sprintf("Force removed package '%s' from registry '%s'\n", packageName, registryName), err, false, 0)
+
+	checkRegistriesFile(t, registriesFile, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{"otherpkg": {"v2.0.0"}}}})
+}
+
+func TestRegistryRmVersionNotFound(t *testing.T) {
+	tempDir := t.TempDir()
+	registryName := "myreg"
+	packageName := "mypkg"
+	versionTag := "v1.0.0"
+	gitURL := "https://git.example.com/myreg"
+	registriesFile := setupRegistriesFile(t, tempDir, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {"v1.1.0"}}}})
+	dataBefore, _ := os.ReadFile(registriesFile)
+
+	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName, versionTag)
+	checkOutput(t, stdout, "", fmt.Sprintf("Error: Version '%s' not found for package '%s' in registry '%s'\n", versionTag, packageName, registryName), err, true, 1)
+
+	dataAfter, _ := os.ReadFile(registriesFile)
+	if !bytes.Equal(dataBefore, dataAfter) {
+		t.Errorf("registries.json changed unexpectedly")
+	}
+}
+
+func TestRegistryRmPackageNotFound(t *testing.T) {
+	tempDir := t.TempDir()
+	registryName := "myreg"
+	packageName := "mypkg"
+	gitURL := "https://git.example.com/myreg"
+	registriesFile := setupRegistriesFile(t, tempDir, []struct {
+		Name        string              `json:"name"`
+		GitURL      string              `json:"giturl"`
+		Packages    map[string][]string `json:"packages,omitempty"`
+		LastUpdated time.Time           `json:"last_updated,omitempty"`
+	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{"otherpkg": {"v2.0.0"}}}})
+	dataBefore, _ := os.ReadFile(registriesFile)
+
+	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName)
+	checkOutput(t, stdout, "", fmt.Sprintf("Error: Package '%s' not found in registry '%s'\n", packageName, registryName), err, true, 1)
 
 	dataAfter, _ := os.ReadFile(registriesFile)
 	if !bytes.Equal(dataBefore, dataAfter) {

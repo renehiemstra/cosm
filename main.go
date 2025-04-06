@@ -1,17 +1,3 @@
-package main
-
-import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
-	"time"
-
-	"github.com/spf13/cobra"
-)
-
-const version = "0.1.0"
-
 // cosm --version
 // cosm status
 // cosm activate
@@ -53,14 +39,27 @@ const version = "0.1.0"
 
 // cosm downgrade <name> v<version>
 
-// ValidRegistries is a list of allowed registry names
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/spf13/cobra"
+)
+
+const version = "0.1.0"
+
 var ValidRegistries = []string{"cosmic-hub", "local"}
 
-// Registry represents a package registry
 type Registry struct {
-	Name        string    `json:"name"`
-	GitURL      string    `json:"giturl"`
-	LastUpdated time.Time `json:"last_updated,omitempty"`
+	Name        string              `json:"name"`
+	GitURL      string              `json:"giturl"`
+	Packages    map[string][]string `json:"packages,omitempty"` // Map of package names to version tags
+	LastUpdated time.Time           `json:"last_updated,omitempty"`
 }
 
 func main() {
@@ -93,9 +92,6 @@ func main() {
 		},
 	}
 
-	// cosm activate
-	// An interactive environment is loaded, which initialized all environment variables
-	// needed for dependency management. The interactive prompt looks like
 	var activateCmd = &cobra.Command{
 		Use:   "activate",
 		Short: "Activate the current project",
@@ -117,15 +113,12 @@ func main() {
 		},
 	}
 
-	// cosm registry status <registry name>
-	// Gives an overview of the packages registered to the registry. Can be evaluated anywhere.
 	var registryStatusCmd = &cobra.Command{
 		Use:   "status [registry-name]",
 		Short: "Show contents of a registry",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			registryName := args[0]
-			// Validate registry name
 			valid := false
 			for _, validReg := range ValidRegistries {
 				if registryName == validReg {
@@ -145,9 +138,6 @@ func main() {
 		},
 	}
 
-	// cosm registry init <registry name> <giturl>
-	// Adds a new package registry with name name (in .cosm/registries) with remote located
-	// at giturl. The giturl should point to an empty remote git repository.
 	var registryInitCmd = &cobra.Command{
 		Use:   "init [registry-name] [giturl]",
 		Short: "Initialize a new registry",
@@ -155,18 +145,12 @@ func main() {
 		Run: func(cmd *cobra.Command, args []string) {
 			registryName := args[0]
 			gitURL := args[1]
-
-			// Create .cosm directory if it doesn’t exist
 			cosmDir := ".cosm"
 			if err := os.MkdirAll(cosmDir, 0755); err != nil {
 				fmt.Printf("Error creating .cosm directory: %v\n", err)
 				os.Exit(1)
 			}
-
-			// Path to registries.json
 			registriesFile := filepath.Join(cosmDir, "registries.json")
-
-			// Load existing registries (or initialize empty list)
 			var registries []Registry
 			if data, err := os.ReadFile(registriesFile); err == nil {
 				if err := json.Unmarshal(data, &registries); err != nil {
@@ -177,19 +161,17 @@ func main() {
 				fmt.Printf("Error reading registries.json: %v\n", err)
 				os.Exit(1)
 			}
-
-			// Check for duplicate registry name
 			for _, reg := range registries {
 				if reg.Name == registryName {
 					fmt.Printf("Error: Registry '%s' already exists\n", registryName)
 					os.Exit(1)
 				}
 			}
-
-			// Add new registry
-			registries = append(registries, Registry{Name: registryName, GitURL: gitURL})
-
-			// Write updated registries back to file
+			registries = append(registries, Registry{
+				Name:     registryName,
+				GitURL:   gitURL,
+				Packages: make(map[string][]string), // Initialize empty package map
+			})
 			data, err := json.MarshalIndent(registries, "", "  ")
 			if err != nil {
 				fmt.Printf("Error marshaling registries: %v\n", err)
@@ -199,14 +181,10 @@ func main() {
 				fmt.Printf("Error writing registries.json: %v\n", err)
 				os.Exit(1)
 			}
-
 			fmt.Printf("Initialized registry '%s' with Git URL: %s\n", registryName, gitURL)
 		},
 	}
 
-	// "registry clone <giturl>"
-	// Adds an existing package registry (in .cosm/registries) with remote located
-	// at giturl. The giturl should point to a valid existing package registry.
 	var registryCloneCmd = &cobra.Command{
 		Use:   "clone [giturl]",
 		Short: "Clone a registry from a Git URL",
@@ -218,15 +196,11 @@ func main() {
 				fmt.Printf("Error creating .cosm directory: %v\n", err)
 				os.Exit(1)
 			}
-
-			// Generate a name from the giturl (e.g., last part of the URL)
 			name := filepath.Base(gitURL)
 			if name == "" || name == "." {
 				fmt.Printf("Error: Could not derive a valid registry name from %s\n", gitURL)
 				os.Exit(1)
 			}
-
-			// Load existing registries
 			registriesFile := filepath.Join(cosmDir, "registries.json")
 			var registries []Registry
 			if data, err := os.ReadFile(registriesFile); err == nil {
@@ -238,17 +212,17 @@ func main() {
 				fmt.Printf("Error reading registries.json: %v\n", err)
 				os.Exit(1)
 			}
-
-			// Check for duplicate
 			for _, reg := range registries {
 				if reg.Name == name {
 					fmt.Printf("Error: Registry '%s' already exists\n", name)
 					os.Exit(1)
 				}
 			}
-
-			// Add the registry
-			registries = append(registries, Registry{Name: name, GitURL: gitURL})
+			registries = append(registries, Registry{
+				Name:     name,
+				GitURL:   gitURL,
+				Packages: make(map[string][]string), // Initialize empty package map
+			})
 			data, err := json.MarshalIndent(registries, "", "  ")
 			if err != nil {
 				fmt.Printf("Error marshaling registries: %v\n", err)
@@ -258,12 +232,10 @@ func main() {
 				fmt.Printf("Error writing registries.json: %v\n", err)
 				os.Exit(1)
 			}
-
 			fmt.Printf("Cloned registry '%s' from %s\n", name, gitURL)
 		},
 	}
 
-	// "registry delete <registry name> [--force]"
 	var registryDeleteCmd = &cobra.Command{
 		Use:   "delete [registry-name]",
 		Short: "Delete a registry",
@@ -273,8 +245,6 @@ func main() {
 			force, _ := cmd.Flags().GetBool("force")
 			cosmDir := ".cosm"
 			registriesFile := filepath.Join(cosmDir, "registries.json")
-
-			// Load existing registries
 			var registries []Registry
 			if data, err := os.ReadFile(registriesFile); err == nil {
 				if err := json.Unmarshal(data, &registries); err != nil {
@@ -288,8 +258,6 @@ func main() {
 				fmt.Printf("Error reading registries.json: %v\n", err)
 				os.Exit(1)
 			}
-
-			// Find and remove the registry
 			found := false
 			for i, reg := range registries {
 				if reg.Name == registryName {
@@ -302,8 +270,6 @@ func main() {
 				fmt.Printf("Error: Registry '%s' not found\n", registryName)
 				os.Exit(1)
 			}
-
-			// Write updated registries back
 			data, err := json.MarshalIndent(registries, "", "  ")
 			if err != nil {
 				fmt.Printf("Error marshaling registries: %v\n", err)
@@ -313,7 +279,6 @@ func main() {
 				fmt.Printf("Error writing registries.json: %v\n", err)
 				os.Exit(1)
 			}
-
 			if force {
 				fmt.Printf("Force deleted registry '%s'\n", registryName)
 			} else {
@@ -323,46 +288,132 @@ func main() {
 	}
 	registryDeleteCmd.Flags().BoolP("force", "f", false, "Force deletion of the registry")
 
-	// "registry update <registry name>" and "registry update --all"
 	var registryUpdateCmd = &cobra.Command{
-		Use:   "update [registry-name]",
+		Use:   "update [registry-name | --all]",
 		Short: "Update and synchronize a registry with its remote",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			registryName := args[0]
+			all, _ := cmd.Flags().GetBool("all")
 			cosmDir := ".cosm"
 			registriesFile := filepath.Join(cosmDir, "registries.json")
 
-			// Load existing registries
 			var registries []Registry
 			if data, err := os.ReadFile(registriesFile); err == nil {
-				if err := json.Unmarshal(data, &registries); err != nil { // Fixed typo: ®istries -> &registries
+				if err := json.Unmarshal(data, &registries); err != nil {
 					fmt.Printf("Error parsing registries.json: %v\n", err)
 					os.Exit(1)
 				}
 			} else if os.IsNotExist(err) {
-				fmt.Printf("Error: No registries found to update '%s' from\n", registryName)
+				fmt.Printf("Error: No registries found to update\n")
 				os.Exit(1)
 			} else {
 				fmt.Printf("Error reading registries.json: %v\n", err)
 				os.Exit(1)
 			}
 
-			// Find and update the registry
+			if all {
+				if len(registries) == 0 {
+					fmt.Println("No registries to update")
+					return
+				}
+				for i := range registries {
+					registries[i].LastUpdated = time.Now()
+				}
+				fmt.Println("Updated all registries")
+			} else if len(args) > 0 {
+				registryName := args[0]
+				found := false
+				for i, reg := range registries {
+					if reg.Name == registryName {
+						registries[i].LastUpdated = time.Now()
+						found = true
+						break
+					}
+				}
+				if !found {
+					fmt.Printf("Error: Registry '%s' not found\n", registryName)
+					os.Exit(1)
+				}
+				fmt.Printf("Updated registry '%s'\n", registryName)
+			} else {
+				fmt.Println("Error: 'update' requires a registry name or --all")
+				os.Exit(1)
+			}
+
+			data, err := json.MarshalIndent(registries, "", "  ")
+			if err != nil {
+				fmt.Printf("Error marshaling registries: %v\n", err)
+				os.Exit(1)
+			}
+			if err := os.WriteFile(registriesFile, data, 0644); err != nil {
+				fmt.Printf("Error writing registries.json: %v\n", err)
+				os.Exit(1)
+			}
+		},
+	}
+	registryUpdateCmd.Flags().Bool("all", false, "Update all registries")
+
+	var registryAddCmd = &cobra.Command{
+		Use:   "add [registry-name] v<version> [giturl]",
+		Short: "Register a package version to a registry",
+		Args:  cobra.ExactArgs(3),
+		Run: func(cmd *cobra.Command, args []string) {
+			registryName := args[0]
+			versionTag := args[1]
+			gitURL := args[2]
+
+			if versionTag[0] != 'v' {
+				fmt.Printf("Error: Version '%s' must start with 'v'\n", versionTag)
+				os.Exit(1)
+			}
+
+			cosmDir := ".cosm"
+			if err := os.MkdirAll(cosmDir, 0755); err != nil {
+				fmt.Printf("Error creating .cosm directory: %v\n", err)
+				os.Exit(1)
+			}
+			registriesFile := filepath.Join(cosmDir, "registries.json")
+
+			var registries []Registry
+			if data, err := os.ReadFile(registriesFile); err == nil {
+				if err := json.Unmarshal(data, &registries); err != nil {
+					fmt.Printf("Error parsing registries.json: %v\n", err)
+					os.Exit(1)
+				}
+			} else if !os.IsNotExist(err) {
+				fmt.Printf("Error reading registries.json: %v\n", err)
+				os.Exit(1)
+			}
+
 			found := false
-			for i, reg := range registries {
-				if reg.Name == registryName {
+			for i := range registries {
+				if registries[i].Name == registryName {
+					if registries[i].Packages == nil {
+						registries[i].Packages = make(map[string][]string)
+					}
+					pkgName := "pkg" // Placeholder
+					for _, v := range registries[i].Packages[pkgName] {
+						if v == versionTag {
+							fmt.Printf("Error: Version '%s' already exists in registry '%s' for package '%s'\n", versionTag, registryName, pkgName)
+							os.Exit(1)
+						}
+					}
+					registries[i].Packages[pkgName] = append(registries[i].Packages[pkgName], versionTag)
+					registries[i].GitURL = gitURL
 					registries[i].LastUpdated = time.Now()
 					found = true
 					break
 				}
 			}
 			if !found {
-				fmt.Printf("Error: Registry '%s' not found\n", registryName)
-				os.Exit(1)
+				registries = append(registries, Registry{
+					Name:        registryName,
+					GitURL:      gitURL,
+					Packages:    map[string][]string{"pkg": {versionTag}},
+					LastUpdated: time.Now(),
+				})
 			}
 
-			// Write updated registries back
 			data, err := json.MarshalIndent(registries, "", "  ")
 			if err != nil {
 				fmt.Printf("Error marshaling registries: %v\n", err)
@@ -373,59 +424,112 @@ func main() {
 				os.Exit(1)
 			}
 
-			fmt.Printf("Updated registry '%s'\n", registryName)
+			fmt.Printf("Added version '%s' to registry '%s' from %s\n", versionTag, registryName, gitURL)
 		},
 	}
 
-	// "registry add <registry name> v<version tag> <giturl>"
-	var registryAddCmd = &cobra.Command{
-		Use:   "add [registry-name] v<version> [giturl]",
-		Short: "Add a package to a registry with a version",
-		Args:  cobra.ExactArgs(3),
-		Run: func(cmd *cobra.Command, args []string) {
-			registryName := args[0]
-			versionTag := args[1]
-			gitURL := args[2]
-			if versionTag[0] != 'v' {
-				fmt.Println("Error: version must start with 'v' (e.g., v1.0.0)")
-				os.Exit(1)
-			}
-			fmt.Printf("Added package to registry '%s' with version %s from %s\n", registryName, versionTag, gitURL)
-		},
-	}
-
-	// "registry rm <registry name> <package name> [--force]" and "rm <registry name> <package name> v<version> [--force]"
 	var registryRmCmd = &cobra.Command{
 		Use:   "rm [registry-name] [package-name] [v<version>]",
-		Short: "Remove a package from a registry",
+		Short: "Remove a package or version from a registry",
 		Args:  cobra.RangeArgs(2, 3),
 		Run: func(cmd *cobra.Command, args []string) {
 			registryName := args[0]
 			packageName := args[1]
 			force, _ := cmd.Flags().GetBool("force")
-			if len(args) == 3 {
-				version := args[2]
-				if version[0] != 'v' {
-					fmt.Println("Error: version must start with 'v' (e.g., v1.0.0)")
+			cosmDir := ".cosm"
+			registriesFile := filepath.Join(cosmDir, "registries.json")
+
+			var registries []Registry
+			if data, err := os.ReadFile(registriesFile); err == nil {
+				if err := json.Unmarshal(data, &registries); err != nil {
+					fmt.Printf("Error parsing registries.json: %v\n", err)
 					os.Exit(1)
 				}
-				if force {
-					fmt.Printf("Force removed package '%s' version %s from registry '%s'\n", packageName, version, registryName)
-				} else {
-					fmt.Printf("Removed package '%s' version %s from registry '%s'\n", packageName, version, registryName)
-				}
+			} else if os.IsNotExist(err) {
+				fmt.Printf("Error: No registries found to remove from\n")
+				os.Exit(1)
 			} else {
+				fmt.Printf("Error reading registries.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			foundReg := false
+			regIndex := -1
+			for i, reg := range registries {
+				if reg.Name == registryName {
+					foundReg = true
+					regIndex = i
+					break
+				}
+			}
+			if !foundReg {
+				fmt.Printf("Error: Registry '%s' not found\n", registryName)
+				os.Exit(1)
+			}
+
+			if registries[regIndex].Packages == nil {
+				registries[regIndex].Packages = make(map[string][]string)
+			}
+
+			if len(args) == 3 { // Remove specific version
+				versionTag := args[2]
+				if versionTag[0] != 'v' {
+					fmt.Printf("Error: Version '%s' must start with 'v'\n", versionTag)
+					os.Exit(1)
+				}
+				versions, exists := registries[regIndex].Packages[packageName]
+				if !exists || len(versions) == 0 {
+					fmt.Printf("Error: Package '%s' not found in registry '%s'\n", packageName, registryName)
+					os.Exit(1)
+				}
+				foundVer := false
+				for j, v := range versions {
+					if v == versionTag {
+						registries[regIndex].Packages[packageName] = append(versions[:j], versions[j+1:]...)
+						foundVer = true
+						break
+					}
+				}
+				if !foundVer {
+					fmt.Printf("Error: Version '%s' not found for package '%s' in registry '%s'\n", versionTag, packageName, registryName)
+					os.Exit(1)
+				}
+				if len(registries[regIndex].Packages[packageName]) == 0 {
+					delete(registries[regIndex].Packages, packageName)
+				}
+				registries[regIndex].LastUpdated = time.Now()
+				if force {
+					fmt.Printf("Force removed version '%s' from package '%s' in registry '%s'\n", versionTag, packageName, registryName)
+				} else {
+					fmt.Printf("Removed version '%s' from package '%s' in registry '%s'\n", versionTag, packageName, registryName)
+				}
+			} else { // Remove entire package
+				if _, exists := registries[regIndex].Packages[packageName]; !exists {
+					fmt.Printf("Error: Package '%s' not found in registry '%s'\n", packageName, registryName)
+					os.Exit(1)
+				}
+				delete(registries[regIndex].Packages, packageName)
+				registries[regIndex].LastUpdated = time.Now()
 				if force {
 					fmt.Printf("Force removed package '%s' from registry '%s'\n", packageName, registryName)
 				} else {
 					fmt.Printf("Removed package '%s' from registry '%s'\n", packageName, registryName)
 				}
 			}
+
+			data, err := json.MarshalIndent(registries, "", "  ")
+			if err != nil {
+				fmt.Printf("Error marshaling registries: %v\n", err)
+				os.Exit(1)
+			}
+			if err := os.WriteFile(registriesFile, data, 0644); err != nil {
+				fmt.Printf("Error writing registries.json: %v\n", err)
+				os.Exit(1)
+			}
 		},
 	}
-	registryRmCmd.Flags().BoolP("force", "f", false, "Force removal of the package")
+	registryRmCmd.Flags().BoolP("force", "f", false, "Force removal of the package or version")
 
-	// Add subcommands to registry
 	registryCmd.AddCommand(registryStatusCmd)
 	registryCmd.AddCommand(registryInitCmd)
 	registryCmd.AddCommand(registryCloneCmd)
@@ -434,12 +538,10 @@ func main() {
 	registryCmd.AddCommand(registryAddCmd)
 	registryCmd.AddCommand(registryRmCmd)
 
-	// Add commands to root
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(activateCmd)
 	rootCmd.AddCommand(registryCmd)
 
-	// Execute
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
