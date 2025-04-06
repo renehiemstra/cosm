@@ -48,6 +48,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/spf13/cobra"
 )
 
@@ -58,8 +59,20 @@ var ValidRegistries = []string{"cosmic-hub", "local"}
 type Registry struct {
 	Name        string              `json:"name"`
 	GitURL      string              `json:"giturl"`
-	Packages    map[string][]string `json:"packages,omitempty"` // Map of package names to version tags
+	Packages    map[string][]string `json:"packages,omitempty"`
 	LastUpdated time.Time           `json:"last_updated,omitempty"`
+}
+
+type Dependency struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Develop bool   `json:"develop,omitempty"` // Indicates development mode
+}
+
+type Project struct {
+	Name         string       `json:"name"`
+	Version      string       `json:"version"`
+	Dependencies []Dependency `json:"dependencies,omitempty"`
 }
 
 func main() {
@@ -101,6 +114,324 @@ func main() {
 				os.Exit(1)
 			} else {
 				fmt.Println("Activated current project")
+			}
+		},
+	}
+
+	var initCmd = &cobra.Command{
+		Use:   "init [package-name]",
+		Short: "Initialize a new project with a Project.json file",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			packageName := args[0]
+			projectFile := "Project.json"
+
+			if _, err := os.Stat(projectFile); !os.IsNotExist(err) {
+				fmt.Printf("Error: Project.json already exists in this directory\n")
+				os.Exit(1)
+			}
+
+			project := Project{
+				Name:    packageName,
+				Version: "v0.1.0",
+			}
+
+			data, err := json.MarshalIndent(project, "", "  ")
+			if err != nil {
+				fmt.Printf("Error marshaling Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			if err := os.WriteFile(projectFile, data, 0644); err != nil {
+				fmt.Printf("Error writing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Initialized project '%s' with version v0.1.0\n", packageName)
+		},
+	}
+
+	var addCmd = &cobra.Command{
+		Use:   "add [name] v<version>",
+		Short: "Add a dependency to the project",
+		Args:  cobra.ExactArgs(2),
+		Run: func(cmd *cobra.Command, args []string) {
+			packageName := args[0]
+			versionTag := args[1]
+
+			if versionTag[0] != 'v' {
+				fmt.Printf("Error: Version '%s' must start with 'v'\n", versionTag)
+				os.Exit(1)
+			}
+
+			projectFile := "Project.json"
+			if _, err := os.Stat(projectFile); os.IsNotExist(err) {
+				fmt.Printf("Error: No Project.json found in current directory\n")
+				os.Exit(1)
+			}
+
+			var project Project
+			data, err := os.ReadFile(projectFile)
+			if err != nil {
+				fmt.Printf("Error reading Project.json: %v\n", err)
+				os.Exit(1)
+			}
+			if err := json.Unmarshal(data, &project); err != nil {
+				fmt.Printf("Error parsing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			project.Dependencies = append(project.Dependencies, Dependency{
+				Name:    packageName,
+				Version: versionTag,
+				Develop: false, // Explicitly non-development mode
+			})
+
+			data, err = json.MarshalIndent(project, "", "  ")
+			if err != nil {
+				fmt.Printf("Error marshaling Project.json: %v\n", err)
+				os.Exit(1)
+			}
+			if err := os.WriteFile(projectFile, data, 0644); err != nil {
+				fmt.Printf("Error writing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Added dependency '%s' v%s to project\n", packageName, versionTag)
+		},
+	}
+
+	var rmCmd = &cobra.Command{
+		Use:   "rm [name]",
+		Short: "Remove a dependency from the project",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			packageName := args[0]
+
+			projectFile := "Project.json"
+			if _, err := os.Stat(projectFile); os.IsNotExist(err) {
+				fmt.Printf("Error: No Project.json found in current directory\n")
+				os.Exit(1)
+			}
+
+			var project Project
+			data, err := os.ReadFile(projectFile)
+			if err != nil {
+				fmt.Printf("Error reading Project.json: %v\n", err)
+				os.Exit(1)
+			}
+			if err := json.Unmarshal(data, &project); err != nil {
+				fmt.Printf("Error parsing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			found := false
+			for i, dep := range project.Dependencies {
+				if dep.Name == packageName {
+					project.Dependencies = append(project.Dependencies[:i], project.Dependencies[i+1:]...)
+					found = true
+					break
+				}
+			}
+			if !found {
+				fmt.Printf("Error: Dependency '%s' not found in project\n", packageName)
+				os.Exit(1)
+			}
+
+			data, err = json.MarshalIndent(project, "", "  ")
+			if err != nil {
+				fmt.Printf("Error marshaling Project.json: %v\n", err)
+				os.Exit(1)
+			}
+			if err := os.WriteFile(projectFile, data, 0644); err != nil {
+				fmt.Printf("Error writing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Removed dependency '%s' from project\n", packageName)
+		},
+	}
+
+	var releaseCmd = &cobra.Command{
+		Use:   "release v<version>",
+		Short: "Update the project version",
+		Args:  cobra.MaximumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			projectFile := "Project.json"
+			if _, err := os.Stat(projectFile); os.IsNotExist(err) {
+				fmt.Printf("Error: No Project.json found in current directory\n")
+				os.Exit(1)
+			}
+
+			var project Project
+			data, err := os.ReadFile(projectFile)
+			if err != nil {
+				fmt.Printf("Error reading Project.json: %v\n", err)
+				os.Exit(1)
+			}
+			if err := json.Unmarshal(data, &project); err != nil {
+				fmt.Printf("Error parsing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			currentVer, err := semver.NewVersion(project.Version[1:]) // Strip 'v' prefix
+			if err != nil {
+				fmt.Printf("Error parsing current version '%s': %v\n", project.Version, err)
+				os.Exit(1)
+			}
+
+			var newVersion string
+			patch, _ := cmd.Flags().GetBool("patch")
+			minor, _ := cmd.Flags().GetBool("minor")
+			major, _ := cmd.Flags().GetBool("major")
+
+			if len(args) == 1 { // Explicit version
+				if patch || minor || major {
+					fmt.Println("Error: Cannot specify both explicit version and --patch/--minor/--major flags")
+					os.Exit(1)
+				}
+				newVersion = args[0]
+			} else if patch {
+				newVersion = fmt.Sprintf("v%d.%d.%d", currentVer.Major(), currentVer.Minor(), currentVer.Patch()+1)
+			} else if minor {
+				newVersion = fmt.Sprintf("v%d.%d.%d", currentVer.Major(), currentVer.Minor()+1, 0)
+			} else if major {
+				newVersion = fmt.Sprintf("v%d.%d.%d", currentVer.Major()+1, 0, 0)
+			} else {
+				fmt.Println("Error: Must specify either a version (v<version>) or one of --patch, --minor, or --major")
+				os.Exit(1)
+			}
+
+			newVer, err := semver.NewVersion(newVersion[1:]) // Strip 'v' prefix
+			if err != nil {
+				fmt.Printf("Error parsing new version '%s': %v\n", newVersion, err)
+				os.Exit(1)
+			}
+			if !newVer.GreaterThan(currentVer) {
+				fmt.Printf("Error: New version '%s' must be greater than current version '%s'\n", newVersion, project.Version)
+				os.Exit(1)
+			}
+
+			project.Version = newVersion
+			data, err = json.MarshalIndent(project, "", "  ")
+			if err != nil {
+				fmt.Printf("Error marshaling Project.json: %v\n", err)
+				os.Exit(1)
+			}
+			if err := os.WriteFile(projectFile, data, 0644); err != nil {
+				fmt.Printf("Error writing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Released '%s' v%s\n", project.Name, newVersion)
+		},
+	}
+	releaseCmd.Flags().Bool("patch", false, "Increment the patch version")
+	releaseCmd.Flags().Bool("minor", false, "Increment the minor version")
+	releaseCmd.Flags().Bool("major", false, "Increment the major version")
+
+	var developCmd = &cobra.Command{
+		Use:   "develop [package-name]",
+		Short: "Switch an existing dependency to development mode",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			packageName := args[0]
+
+			projectFile := "Project.json"
+			if _, err := os.Stat(projectFile); os.IsNotExist(err) {
+				fmt.Printf("Error: No Project.json found in current directory\n")
+				os.Exit(1)
+			}
+
+			var project Project
+			data, err := os.ReadFile(projectFile)
+			if err != nil {
+				fmt.Printf("Error reading Project.json: %v\n", err)
+				os.Exit(1)
+			}
+			if err := json.Unmarshal(data, &project); err != nil {
+				fmt.Printf("Error parsing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Find the existing dependency
+			found := false
+			for i, dep := range project.Dependencies {
+				if dep.Name == packageName {
+					project.Dependencies[i].Develop = true
+					found = true
+					data, err = json.MarshalIndent(project, "", "  ")
+					if err != nil {
+						fmt.Printf("Error marshaling Project.json: %v\n", err)
+						os.Exit(1)
+					}
+					if err := os.WriteFile(projectFile, data, 0644); err != nil {
+						fmt.Printf("Error writing Project.json: %v\n", err)
+						os.Exit(1)
+					}
+					fmt.Printf("Switched '%s' v%s to development mode\n", packageName, dep.Version)
+					return
+				}
+			}
+
+			if !found {
+				fmt.Printf("Error: Dependency '%s' not found in project. Use 'cosm add' to add it first.\n", packageName)
+				os.Exit(1)
+			}
+		},
+	}
+
+	var freeCmd = &cobra.Command{
+		Use:   "free [package-name]",
+		Short: "Close development mode for an existing dependency",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			packageName := args[0]
+
+			projectFile := "Project.json"
+			if _, err := os.Stat(projectFile); os.IsNotExist(err) {
+				fmt.Printf("Error: No Project.json found in current directory\n")
+				os.Exit(1)
+			}
+
+			var project Project
+			data, err := os.ReadFile(projectFile)
+			if err != nil {
+				fmt.Printf("Error reading Project.json: %v\n", err)
+				os.Exit(1)
+			}
+			if err := json.Unmarshal(data, &project); err != nil {
+				fmt.Printf("Error parsing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Find the existing dependency
+			found := false
+			for i, dep := range project.Dependencies {
+				if dep.Name == packageName {
+					if !dep.Develop {
+						fmt.Printf("Error: Dependency '%s' v%s is not in development mode\n", packageName, dep.Version)
+						os.Exit(1)
+					}
+					project.Dependencies[i].Develop = false
+					found = true
+					data, err = json.MarshalIndent(project, "", "  ")
+					if err != nil {
+						fmt.Printf("Error marshaling Project.json: %v\n", err)
+						os.Exit(1)
+					}
+					if err := os.WriteFile(projectFile, data, 0644); err != nil {
+						fmt.Printf("Error writing Project.json: %v\n", err)
+						os.Exit(1)
+					}
+					fmt.Printf("Closed development mode for '%s' v%s\n", packageName, dep.Version)
+					return
+				}
+			}
+
+			if !found {
+				fmt.Printf("Error: Dependency '%s' not found in project\n", packageName)
+				os.Exit(1)
 			}
 		},
 	}
@@ -170,7 +501,7 @@ func main() {
 			registries = append(registries, Registry{
 				Name:     registryName,
 				GitURL:   gitURL,
-				Packages: make(map[string][]string), // Initialize empty package map
+				Packages: make(map[string][]string),
 			})
 			data, err := json.MarshalIndent(registries, "", "  ")
 			if err != nil {
@@ -221,7 +552,7 @@ func main() {
 			registries = append(registries, Registry{
 				Name:     name,
 				GitURL:   gitURL,
-				Packages: make(map[string][]string), // Initialize empty package map
+				Packages: make(map[string][]string),
 			})
 			data, err := json.MarshalIndent(registries, "", "  ")
 			if err != nil {
@@ -354,13 +685,14 @@ func main() {
 	registryUpdateCmd.Flags().Bool("all", false, "Update all registries")
 
 	var registryAddCmd = &cobra.Command{
-		Use:   "add [registry-name] v<version> [giturl]",
+		Use:   "add [registry-name] [package-name] v<version> [giturl]",
 		Short: "Register a package version to a registry",
-		Args:  cobra.ExactArgs(3),
+		Args:  cobra.ExactArgs(4),
 		Run: func(cmd *cobra.Command, args []string) {
 			registryName := args[0]
-			versionTag := args[1]
-			gitURL := args[2]
+			packageName := args[1]
+			versionTag := args[2]
+			gitURL := args[3]
 
 			if versionTag[0] != 'v' {
 				fmt.Printf("Error: Version '%s' must start with 'v'\n", versionTag)
@@ -391,14 +723,13 @@ func main() {
 					if registries[i].Packages == nil {
 						registries[i].Packages = make(map[string][]string)
 					}
-					pkgName := "pkg" // Placeholder
-					for _, v := range registries[i].Packages[pkgName] {
+					for _, v := range registries[i].Packages[packageName] {
 						if v == versionTag {
-							fmt.Printf("Error: Version '%s' already exists in registry '%s' for package '%s'\n", versionTag, registryName, pkgName)
+							fmt.Printf("Error: Version '%s' already exists in registry '%s' for package '%s'\n", versionTag, registryName, packageName)
 							os.Exit(1)
 						}
 					}
-					registries[i].Packages[pkgName] = append(registries[i].Packages[pkgName], versionTag)
+					registries[i].Packages[packageName] = append(registries[i].Packages[packageName], versionTag)
 					registries[i].GitURL = gitURL
 					registries[i].LastUpdated = time.Now()
 					found = true
@@ -409,7 +740,7 @@ func main() {
 				registries = append(registries, Registry{
 					Name:        registryName,
 					GitURL:      gitURL,
-					Packages:    map[string][]string{"pkg": {versionTag}},
+					Packages:    map[string][]string{packageName: {versionTag}},
 					LastUpdated: time.Now(),
 				})
 			}
@@ -424,7 +755,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			fmt.Printf("Added version '%s' to registry '%s' from %s\n", versionTag, registryName, gitURL)
+			fmt.Printf("Added version '%s' to package '%s' in registry '%s' from %s\n", versionTag, packageName, registryName, gitURL)
 		},
 	}
 
@@ -471,7 +802,7 @@ func main() {
 				registries[regIndex].Packages = make(map[string][]string)
 			}
 
-			if len(args) == 3 { // Remove specific version
+			if len(args) == 3 {
 				versionTag := args[2]
 				if versionTag[0] != 'v' {
 					fmt.Printf("Error: Version '%s' must start with 'v'\n", versionTag)
@@ -503,7 +834,7 @@ func main() {
 				} else {
 					fmt.Printf("Removed version '%s' from package '%s' in registry '%s'\n", versionTag, packageName, registryName)
 				}
-			} else { // Remove entire package
+			} else {
 				if _, exists := registries[regIndex].Packages[packageName]; !exists {
 					fmt.Printf("Error: Package '%s' not found in registry '%s'\n", packageName, registryName)
 					os.Exit(1)
@@ -540,6 +871,12 @@ func main() {
 
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(activateCmd)
+	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(addCmd)
+	rootCmd.AddCommand(rmCmd)
+	rootCmd.AddCommand(releaseCmd)
+	rootCmd.AddCommand(developCmd)
+	rootCmd.AddCommand(freeCmd)
 	rootCmd.AddCommand(registryCmd)
 
 	if err := rootCmd.Execute(); err != nil {
