@@ -436,6 +436,189 @@ func main() {
 		},
 	}
 
+	var upgradeCmd = &cobra.Command{
+		Use:   "upgrade [name] [v<version>]",
+		Short: "Upgrade a dependency or all dependencies",
+		Args:  cobra.RangeArgs(0, 2),
+		Run: func(cmd *cobra.Command, args []string) {
+			allFlag, _ := cmd.Flags().GetBool("all")
+			latestFlag, _ := cmd.Flags().GetBool("latest")
+
+			projectFile := "Project.json"
+			if _, err := os.Stat(projectFile); os.IsNotExist(err) {
+				fmt.Printf("Error: No Project.json found in current directory\n")
+				os.Exit(1)
+			}
+
+			var project Project
+			data, err := os.ReadFile(projectFile)
+			if err != nil {
+				fmt.Printf("Error reading Project.json: %v\n", err)
+				os.Exit(1)
+			}
+			if err := json.Unmarshal(data, &project); err != nil {
+				fmt.Printf("Error parsing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			if allFlag {
+				if len(args) > 0 {
+					fmt.Println("Error: Cannot specify a package name with --all")
+					os.Exit(1)
+				}
+				for i, dep := range project.Dependencies {
+					if dep.Develop {
+						continue // Skip development mode dependencies
+					}
+					currentVer, err := semver.NewVersion(dep.Version[1:])
+					if err != nil {
+						fmt.Printf("Error parsing version '%s' for '%s': %v\n", dep.Version, dep.Name, err)
+						os.Exit(1)
+					}
+					if latestFlag {
+						project.Dependencies[i].Version = "v2.0.0" // Placeholder for latest
+					} else {
+						project.Dependencies[i].Version = fmt.Sprintf("v%d.%d.%d", currentVer.Major(), currentVer.Minor(), currentVer.Patch()+1)
+					}
+					fmt.Printf("Upgraded '%s' to %s\n", dep.Name, project.Dependencies[i].Version)
+				}
+			} else {
+				if len(args) < 1 {
+					fmt.Println("Error: Must specify a package name or use --all")
+					os.Exit(1)
+				}
+				packageName := args[0]
+				var versionConstraint string
+				if len(args) == 2 {
+					versionConstraint = args[1]
+					if versionConstraint[0] != 'v' {
+						fmt.Printf("Error: Version constraint '%s' must start with 'v'\n", versionConstraint)
+						os.Exit(1)
+					}
+				}
+
+				found := false
+				for i, dep := range project.Dependencies {
+					if dep.Name == packageName {
+						if dep.Develop {
+							fmt.Printf("Error: Cannot upgrade '%s' as it is in development mode\n", packageName)
+							os.Exit(1)
+						}
+						currentVer, err := semver.NewVersion(dep.Version[1:])
+						if err != nil {
+							fmt.Printf("Error parsing version '%s' for '%s': %v\n", dep.Version, packageName, err)
+							os.Exit(1)
+						}
+						if latestFlag {
+							if len(args) == 2 {
+								fmt.Println("Error: Cannot specify a version constraint with --latest")
+								os.Exit(1)
+							}
+							project.Dependencies[i].Version = "v2.0.0" // Placeholder for latest
+						} else if len(args) == 2 {
+							project.Dependencies[i].Version = versionConstraint // Exact version
+						} else {
+							project.Dependencies[i].Version = fmt.Sprintf("v%d.%d.%d", currentVer.Major(), currentVer.Minor(), currentVer.Patch()+1)
+						}
+						fmt.Printf("Upgraded '%s' to %s\n", packageName, project.Dependencies[i].Version)
+						found = true
+						break
+					}
+				}
+				if !found {
+					fmt.Printf("Error: Dependency '%s' not found in project\n", packageName)
+					os.Exit(1)
+				}
+			}
+
+			data, err = json.MarshalIndent(project, "", "  ")
+			if err != nil {
+				fmt.Printf("Error marshaling Project.json: %v\n", err)
+				os.Exit(1)
+			}
+			if err := os.WriteFile(projectFile, data, 0644); err != nil {
+				fmt.Printf("Error writing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+		},
+	}
+	upgradeCmd.Flags().Bool("all", false, "Upgrade all direct dependencies")
+	upgradeCmd.Flags().Bool("latest", false, "Use the latest version instead of the latest compatible version")
+
+	var downgradeCmd = &cobra.Command{
+		Use:   "downgrade [name] v<version>",
+		Short: "Downgrade a dependency to an older version",
+		Args:  cobra.ExactArgs(2),
+		Run: func(cmd *cobra.Command, args []string) {
+			packageName := args[0]
+			newVersion := args[1]
+
+			if newVersion[0] != 'v' {
+				fmt.Printf("Error: Version '%s' must start with 'v'\n", newVersion)
+				os.Exit(1)
+			}
+
+			projectFile := "Project.json"
+			if _, err := os.Stat(projectFile); os.IsNotExist(err) {
+				fmt.Printf("Error: No Project.json found in current directory\n")
+				os.Exit(1)
+			}
+
+			var project Project
+			data, err := os.ReadFile(projectFile)
+			if err != nil {
+				fmt.Printf("Error reading Project.json: %v\n", err)
+				os.Exit(1)
+			}
+			if err := json.Unmarshal(data, &project); err != nil {
+				fmt.Printf("Error parsing Project.json: %v\n", err)
+				os.Exit(1)
+			}
+
+			found := false
+			for i, dep := range project.Dependencies {
+				if dep.Name == packageName {
+					if dep.Develop {
+						fmt.Printf("Error: Cannot downgrade '%s' as it is in development mode\n", packageName)
+						os.Exit(1)
+					}
+					currentVer, err := semver.NewVersion(dep.Version[1:])
+					if err != nil {
+						fmt.Printf("Error parsing current version '%s' for '%s': %v\n", dep.Version, packageName, err)
+						os.Exit(1)
+					}
+					targetVer, err := semver.NewVersion(newVersion[1:])
+					if err != nil {
+						fmt.Printf("Error parsing target version '%s' for '%s': %v\n", newVersion, packageName, err)
+						os.Exit(1)
+					}
+					if !currentVer.GreaterThan(targetVer) {
+						fmt.Printf("Error: Target version '%s' must be older than current version '%s' for '%s'\n", newVersion, dep.Version, packageName)
+						os.Exit(1)
+					}
+					project.Dependencies[i].Version = newVersion
+					found = true
+					data, err = json.MarshalIndent(project, "", "  ")
+					if err != nil {
+						fmt.Printf("Error marshaling Project.json: %v\n", err)
+						os.Exit(1)
+					}
+					if err := os.WriteFile(projectFile, data, 0644); err != nil {
+						fmt.Printf("Error writing Project.json: %v\n", err)
+						os.Exit(1)
+					}
+					fmt.Printf("Downgraded '%s' to %s\n", packageName, newVersion)
+					break
+				}
+			}
+
+			if !found {
+				fmt.Printf("Error: Dependency '%s' not found in project\n", packageName)
+				os.Exit(1)
+			}
+		},
+	}
+
 	var registryCmd = &cobra.Command{
 		Use:   "registry",
 		Short: "Manage package registries",
@@ -877,6 +1060,8 @@ func main() {
 	rootCmd.AddCommand(releaseCmd)
 	rootCmd.AddCommand(developCmd)
 	rootCmd.AddCommand(freeCmd)
+	rootCmd.AddCommand(upgradeCmd)
+	rootCmd.AddCommand(downgradeCmd)
 	rootCmd.AddCommand(registryCmd)
 
 	if err := rootCmd.Execute(); err != nil {

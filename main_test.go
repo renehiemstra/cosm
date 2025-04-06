@@ -706,6 +706,291 @@ func TestFreeNoProject(t *testing.T) {
 	checkOutput(t, stdout, "", "Error: No Project.json found in current directory\n", err, true, 1)
 }
 
+func TestUpgradeSpecificNoVersion(t *testing.T) {
+	tempDir := t.TempDir()
+	projectName := "myproject"
+	depName := "mypkg"
+	initialVersion := "v1.2.3"
+	expectedVersion := "v1.2.4"
+
+	projectFile := filepath.Join(tempDir, "Project.json")
+	initialProject := struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
+	data, _ := json.MarshalIndent(initialProject, "", "  ")
+	if err := os.WriteFile(projectFile, data, 0644); err != nil {
+		t.Fatalf("Failed to create initial Project.json: %v", err)
+	}
+
+	stdout, _, err := runCommand(t, tempDir, "upgrade", depName)
+	checkOutput(t, stdout, "", fmt.Sprintf("Upgraded '%s' to %s\n", depName, expectedVersion), err, false, 0)
+
+	checkProjectFile(t, projectFile, struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
+}
+
+func TestUpgradeSpecificExactVersion(t *testing.T) {
+	tempDir := t.TempDir()
+	projectName := "myproject"
+	depName := "mypkg"
+	initialVersion := "v1.2.3"
+	expectedVersion := "v1.3.0"
+
+	projectFile := filepath.Join(tempDir, "Project.json")
+	initialProject := struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
+	data, _ := json.MarshalIndent(initialProject, "", "  ")
+	if err := os.WriteFile(projectFile, data, 0644); err != nil {
+		t.Fatalf("Failed to create initial Project.json: %v", err)
+	}
+
+	stdout, _, err := runCommand(t, tempDir, "upgrade", depName, "v1.3.0")
+	checkOutput(t, stdout, "", fmt.Sprintf("Upgraded '%s' to %s\n", depName, expectedVersion), err, false, 0)
+
+	checkProjectFile(t, projectFile, struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
+}
+
+func TestUpgradeSpecificLatest(t *testing.T) {
+	tempDir := t.TempDir()
+	projectName := "myproject"
+	depName := "mypkg"
+	initialVersion := "v1.2.3"
+	expectedVersion := "v2.0.0"
+
+	projectFile := filepath.Join(tempDir, "Project.json")
+	initialProject := struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
+	data, _ := json.MarshalIndent(initialProject, "", "  ")
+	if err := os.WriteFile(projectFile, data, 0644); err != nil {
+		t.Fatalf("Failed to create initial Project.json: %v", err)
+	}
+
+	stdout, _, err := runCommand(t, tempDir, "upgrade", depName, "--latest")
+	checkOutput(t, stdout, "", fmt.Sprintf("Upgraded '%s' to %s\n", depName, expectedVersion), err, false, 0)
+
+	checkProjectFile(t, projectFile, struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
+}
+
+func TestUpgradeAll(t *testing.T) {
+	tempDir := t.TempDir()
+	projectName := "myproject"
+	dep1Name := "mypkg1"
+	dep2Name := "mypkg2"
+	initialVersion1 := "v1.0.0"
+	initialVersion2 := "v2.1.0"
+	expectedVersion1 := "v1.0.1"
+	expectedVersion2 := "v2.1.1"
+
+	projectFile := filepath.Join(tempDir, "Project.json")
+	initialProject := struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{
+		{Name: dep1Name, Version: initialVersion1, Develop: false},
+		{Name: dep2Name, Version: initialVersion2, Develop: false},
+	}}
+	data, _ := json.MarshalIndent(initialProject, "", "  ")
+	if err := os.WriteFile(projectFile, data, 0644); err != nil {
+		t.Fatalf("Failed to create initial Project.json: %v", err)
+	}
+
+	stdout, _, err := runCommand(t, tempDir, "upgrade", "--all")
+	expectedOutput := fmt.Sprintf("Upgraded '%s' to %s\nUpgraded '%s' to %s\n", dep1Name, expectedVersion1, dep2Name, expectedVersion2)
+	checkOutput(t, stdout, "", expectedOutput, err, false, 0)
+
+	checkProjectFile(t, projectFile, struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{
+		{Name: dep1Name, Version: expectedVersion1, Develop: false},
+		{Name: dep2Name, Version: expectedVersion2, Develop: false},
+	}})
+}
+
+func TestUpgradeAllLatest(t *testing.T) {
+	tempDir := t.TempDir()
+	projectName := "myproject"
+	dep1Name := "mypkg1"
+	dep2Name := "mypkg2"
+	initialVersion1 := "v1.0.0"
+	initialVersion2 := "v2.1.0"
+	expectedVersion := "v2.0.0"
+
+	projectFile := filepath.Join(tempDir, "Project.json")
+	initialProject := struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{
+		{Name: dep1Name, Version: initialVersion1, Develop: false},
+		{Name: dep2Name, Version: initialVersion2, Develop: false},
+	}}
+	data, _ := json.MarshalIndent(initialProject, "", "  ")
+	if err := os.WriteFile(projectFile, data, 0644); err != nil {
+		t.Fatalf("Failed to create initial Project.json: %v", err)
+	}
+
+	stdout, _, err := runCommand(t, tempDir, "upgrade", "--all", "--latest")
+	expectedOutput := fmt.Sprintf("Upgraded '%s' to %s\nUpgraded '%s' to %s\n", dep1Name, expectedVersion, dep2Name, expectedVersion)
+	checkOutput(t, stdout, "", expectedOutput, err, false, 0)
+
+	checkProjectFile(t, projectFile, struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{
+		{Name: dep1Name, Version: expectedVersion, Develop: false},
+		{Name: dep2Name, Version: expectedVersion, Develop: false},
+	}})
+}
+
+func TestUpgradeNonExistingDependency(t *testing.T) {
+	tempDir := t.TempDir()
+	projectName := "myproject"
+	depName := "mypkg"
+
+	projectFile := filepath.Join(tempDir, "Project.json")
+	initialProject := struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
+	data, _ := json.MarshalIndent(initialProject, "", "  ")
+	if err := os.WriteFile(projectFile, data, 0644); err != nil {
+		t.Fatalf("Failed to create initial Project.json: %v", err)
+	}
+	dataBefore, _ := os.ReadFile(projectFile)
+
+	stdout, _, err := runCommand(t, tempDir, "upgrade", depName)
+	checkOutput(t, stdout, "", fmt.Sprintf("Error: Dependency '%s' not found in project\n", depName), err, true, 1)
+
+	dataAfter, _ := os.ReadFile(projectFile)
+	if !bytes.Equal(dataBefore, dataAfter) {
+		t.Errorf("Project.json changed unexpectedly")
+	}
+}
+
+func TestUpgradeNoProject(t *testing.T) {
+	tempDir := t.TempDir()
+	depName := "mypkg"
+
+	stdout, _, err := runCommand(t, tempDir, "upgrade", depName)
+	checkOutput(t, stdout, "", "Error: No Project.json found in current directory\n", err, true, 1)
+}
+
+func TestDowngradeValidVersion(t *testing.T) {
+	tempDir := t.TempDir()
+	projectName := "myproject"
+	depName := "mypkg"
+	initialVersion := "v1.2.3"
+	targetVersion := "v1.2.0"
+
+	projectFile := filepath.Join(tempDir, "Project.json")
+	initialProject := struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
+	data, _ := json.MarshalIndent(initialProject, "", "  ")
+	if err := os.WriteFile(projectFile, data, 0644); err != nil {
+		t.Fatalf("Failed to create initial Project.json: %v", err)
+	}
+
+	stdout, _, err := runCommand(t, tempDir, "downgrade", depName, targetVersion)
+	checkOutput(t, stdout, "", fmt.Sprintf("Downgraded '%s' to %s\n", depName, targetVersion), err, false, 0)
+
+	checkProjectFile(t, projectFile, struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: targetVersion, Develop: false}}})
+}
+
+func TestDowngradeNotOlderVersion(t *testing.T) {
+	tempDir := t.TempDir()
+	projectName := "myproject"
+	depName := "mypkg"
+	initialVersion := "v1.2.3"
+	targetVersion := "v1.2.4"
+
+	projectFile := filepath.Join(tempDir, "Project.json")
+	initialProject := struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
+	data, _ := json.MarshalIndent(initialProject, "", "  ")
+	if err := os.WriteFile(projectFile, data, 0644); err != nil {
+		t.Fatalf("Failed to create initial Project.json: %v", err)
+	}
+	dataBefore, _ := os.ReadFile(projectFile)
+
+	stdout, _, err := runCommand(t, tempDir, "downgrade", depName, targetVersion)
+	checkOutput(t, stdout, "", fmt.Sprintf("Error: Target version '%s' must be older than current version '%s' for '%s'\n", targetVersion, initialVersion, depName), err, true, 1)
+
+	dataAfter, _ := os.ReadFile(projectFile)
+	if !bytes.Equal(dataBefore, dataAfter) {
+		t.Errorf("Project.json changed unexpectedly")
+	}
+}
+
+func TestDowngradeNonExistingDependency(t *testing.T) {
+	tempDir := t.TempDir()
+	projectName := "myproject"
+	depName := "mypkg"
+	targetVersion := "v1.2.0"
+
+	projectFile := filepath.Join(tempDir, "Project.json")
+	initialProject := struct {
+		Name         string       `json:"name"`
+		Version      string       `json:"version"`
+		Dependencies []Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
+	data, _ := json.MarshalIndent(initialProject, "", "  ")
+	if err := os.WriteFile(projectFile, data, 0644); err != nil {
+		t.Fatalf("Failed to create initial Project.json: %v", err)
+	}
+	dataBefore, _ := os.ReadFile(projectFile)
+
+	stdout, _, err := runCommand(t, tempDir, "downgrade", depName, targetVersion)
+	checkOutput(t, stdout, "", fmt.Sprintf("Error: Dependency '%s' not found in project\n", depName), err, true, 1)
+
+	dataAfter, _ := os.ReadFile(projectFile)
+	if !bytes.Equal(dataBefore, dataAfter) {
+		t.Errorf("Project.json changed unexpectedly")
+	}
+}
+
+func TestDowngradeNoProject(t *testing.T) {
+	tempDir := t.TempDir()
+	depName := "mypkg"
+	targetVersion := "v1.2.0"
+
+	stdout, _, err := runCommand(t, tempDir, "downgrade", depName, targetVersion)
+	checkOutput(t, stdout, "", "Error: No Project.json found in current directory\n", err, true, 1)
+}
+
 func TestRegistryStatus(t *testing.T) {
 	tempDir := t.TempDir()
 	stdout, _, err := runCommand(t, tempDir, "registry", "status", "cosmic-hub")
