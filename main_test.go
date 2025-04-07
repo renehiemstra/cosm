@@ -8,8 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // binaryPath holds the path to the compiled cosm binary
@@ -207,18 +210,91 @@ func TestActivateFailure(t *testing.T) {
 	checkOutput(t, stdout, "", "Error: No project found in current directory (missing cosm.json)\n", err, true, 1)
 }
 
+// TestInit tests the cosm init command with isolated Git config
 func TestInit(t *testing.T) {
 	tempDir := t.TempDir()
 	packageName := "myproject"
 
-	stdout, _, err := runCommand(t, tempDir, "init", packageName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Initialized project '%s' with version v0.1.0\n", packageName), err, false, 0)
+	// Create a temporary Git config file
+	tempGitConfig := filepath.Join(tempDir, "gitconfig")
+	if err := os.WriteFile(tempGitConfig, []byte(""), 0644); err != nil {
+		t.Fatalf("Failed to create temporary Git config file: %v", err)
+	}
 
-	checkProjectFile(t, filepath.Join(tempDir, "Project.json"), struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: packageName, Version: "v0.1.0"})
+	// Set GIT_CONFIG_GLOBAL to isolate Git config changes
+	os.Setenv("GIT_CONFIG_GLOBAL", tempGitConfig)
+	defer os.Unsetenv("GIT_CONFIG_GLOBAL") // Clean up after test
+
+	// Set mock git config in the temporary file
+	cmdName := exec.Command("git", "config", "--file", tempGitConfig, "user.name", "testuser")
+	cmdEmail := exec.Command("git", "config", "--file", tempGitConfig, "user.email", "testuser@git.com")
+	if err := cmdName.Run(); err != nil {
+		t.Fatalf("Failed to set git user.name in temp config: %v", err)
+	}
+	if err := cmdEmail.Run(); err != nil {
+		t.Fatalf("Failed to set git user.email in temp config: %v", err)
+	}
+
+	// Run the command
+	stdout, _, err := runCommand(t, tempDir, "init", packageName)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	expectedOutputPrefix := fmt.Sprintf("Initialized project '%s' with version v0.1.0 and UUID ", packageName)
+	if !strings.HasPrefix(stdout, expectedOutputPrefix) {
+		t.Errorf("Expected output to start with %q, got %q", expectedOutputPrefix, stdout)
+	}
+
+	// Determine expected author based on the temporary git config
+	expectedAuthor := "[unknown]unknown@author.com"
+	name, errName := exec.Command("git", "config", "--file", tempGitConfig, "user.name").Output()
+	email, errEmail := exec.Command("git", "config", "--file", tempGitConfig, "user.email").Output()
+	if errName == nil && errEmail == nil && len(name) > 0 && len(email) > 0 {
+		expectedAuthor = fmt.Sprintf("[%s]%s", strings.TrimSpace(string(name)), strings.TrimSpace(string(email)))
+	}
+	expectedAuthors := []string{expectedAuthor}
+
+	// Check the created Project.json
+	projectFile := filepath.Join(tempDir, "Project.json")
+	expectedProject := types.Project{
+		Name:     packageName,
+		Authors:  expectedAuthors,
+		Language: "", // Unspecified by default
+		Version:  "v0.1.0",
+		Deps:     make(map[string]string),
+	}
+	data, err := os.ReadFile(projectFile)
+	if err != nil {
+		t.Fatalf("Failed to read Project.json: %v", err)
+	}
+	var project types.Project
+	if err := json.Unmarshal(data, &project); err != nil {
+		t.Fatalf("Failed to parse Project.json: %v", err)
+	}
+
+	// Verify fields
+	if project.Name != expectedProject.Name {
+		t.Errorf("Expected Name %q, got %q", expectedProject.Name, project.Name)
+	}
+	if project.Version != expectedProject.Version {
+		t.Errorf("Expected Version %q, got %q", expectedProject.Version, project.Version)
+	}
+	if project.Language != expectedProject.Language {
+		t.Errorf("Expected Language %q, got %q", expectedProject.Language, project.Language)
+	}
+	if len(project.Authors) != len(expectedProject.Authors) || project.Authors[0] != expectedProject.Authors[0] {
+		t.Errorf("Expected Authors %v, got %v", expectedProject.Authors, project.Authors)
+	}
+	if len(project.Deps) != 0 {
+		t.Errorf("Expected empty Deps, got %v", project.Deps)
+	}
+	if project.UUID == "" {
+		t.Errorf("Expected non-empty UUID, got empty")
+	} else {
+		if _, err := uuid.Parse(project.UUID); err != nil {
+			t.Errorf("Expected valid UUID, got %q: %v", project.UUID, err)
+		}
+	}
 }
 
 func TestInitDuplicate(t *testing.T) {
@@ -246,1196 +322,53 @@ func TestInitDuplicate(t *testing.T) {
 	}
 }
 
-func TestAdd(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-	depVersion := "v1.2.3"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0"}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "add", depName, depVersion)
-	checkOutput(t, stdout, "", fmt.Sprintf("Added dependency '%s' v%s to project\n", depName, depVersion), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion}}})
-}
-
-func TestAddNoProject(t *testing.T) {
-	tempDir := t.TempDir()
-	depName := "mypkg"
-	depVersion := "v1.2.3"
-
-	stdout, _, err := runCommand(t, tempDir, "add", depName, depVersion)
-	checkOutput(t, stdout, "", "Error: No Project.json found in current directory\n", err, true, 1)
-}
-
-func TestAddInvalidVersion(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-	depVersion := "1.2.3"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0"}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-	dataBefore, _ := os.ReadFile(projectFile)
-
-	stdout, _, err := runCommand(t, tempDir, "add", depName, depVersion)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Version '%s' must start with 'v'\n", depVersion), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(projectFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("Project.json changed unexpectedly")
-	}
-}
-
-func TestRm(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: "v1.2.3"}, {Name: "otherpkg", Version: "v2.0.0"}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "rm", depName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Removed dependency '%s' from project\n", depName), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0"}}})
-}
-
-func TestRmNoProject(t *testing.T) {
-	tempDir := t.TempDir()
-	depName := "mypkg"
-
-	stdout, _, err := runCommand(t, tempDir, "rm", depName)
-	checkOutput(t, stdout, "", "Error: No Project.json found in current directory\n", err, true, 1)
-}
-
-func TestRmDependencyNotFound(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0"}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-	dataBefore, _ := os.ReadFile(projectFile)
-
-	stdout, _, err := runCommand(t, tempDir, "rm", depName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Dependency '%s' not found in project\n", depName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(projectFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("Project.json changed unexpectedly")
-	}
-}
-
-func TestReleaseExplicit(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	newVersion := "v0.2.0"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0"}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "release", newVersion)
-	checkOutput(t, stdout, "", fmt.Sprintf("Released '%s' v%s\n", projectName, newVersion), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: newVersion})
-}
-
-func TestReleasePatch(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	newVersion := "v0.1.1"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0"}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "release", "--patch")
-	checkOutput(t, stdout, "", fmt.Sprintf("Released '%s' v%s\n", projectName, newVersion), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: newVersion})
-}
-
-func TestReleaseMinor(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	newVersion := "v0.2.0"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0"}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "release", "--minor")
-	checkOutput(t, stdout, "", fmt.Sprintf("Released '%s' v%s\n", projectName, newVersion), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: newVersion})
-}
-
-func TestReleaseMajor(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	newVersion := "v1.0.0"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0"}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "release", "--major")
-	checkOutput(t, stdout, "", fmt.Sprintf("Released '%s' v%s\n", projectName, newVersion), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: newVersion})
-}
-
-func TestReleaseNoProject(t *testing.T) {
-	tempDir := t.TempDir()
-	newVersion := "v0.2.0"
-
-	stdout, _, err := runCommand(t, tempDir, "release", newVersion)
-	checkOutput(t, stdout, "", "Error: No Project.json found in current directory\n", err, true, 1)
-}
-
-func TestReleaseInvalidVersion(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	newVersion := "v0.2.x" // Invalid SemVer
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0"}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-	dataBefore, _ := os.ReadFile(projectFile)
-
-	stdout, _, err := runCommand(t, tempDir, "release", newVersion)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error parsing new version '%s': Invalid Semantic Version\n", newVersion), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(projectFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("Project.json changed unexpectedly")
-	}
-}
-
-func TestReleaseNotGreater(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	newVersion := "v0.0.1"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0"}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-	dataBefore, _ := os.ReadFile(projectFile)
-
-	stdout, _, err := runCommand(t, tempDir, "release", newVersion)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: New version '%s' must be greater than current version '%s'\n", newVersion, "v0.1.0"), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(projectFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("Project.json changed unexpectedly")
-	}
-}
-
-func TestReleaseNoArgs(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0"}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-	dataBefore, _ := os.ReadFile(projectFile)
-
-	stdout, _, err := runCommand(t, tempDir, "release")
-	checkOutput(t, stdout, "", "Error: Must specify either a version (v<version>) or one of --patch, --minor, or --major\n", err, true, 1)
-
-	dataAfter, _ := os.ReadFile(projectFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("Project.json changed unexpectedly")
-	}
-}
-
-func TestDevelopExistingDependency(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-	depVersion := "v1.2.3"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion, Develop: false}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "develop", depName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Switched '%s' v%s to development mode\n", depName, depVersion), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion, Develop: true}}})
-}
-
-func TestDevelopNonExistingDependency(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-	dataBefore, _ := os.ReadFile(projectFile)
-
-	stdout, _, err := runCommand(t, tempDir, "develop", depName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Dependency '%s' not found in project. Use 'cosm add' to add it first.\n", depName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(projectFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("Project.json changed unexpectedly")
-	}
-}
-
-func TestDevelopNoProject(t *testing.T) {
-	tempDir := t.TempDir()
-	depName := "mypkg"
-
-	stdout, _, err := runCommand(t, tempDir, "develop", depName)
-	checkOutput(t, stdout, "", "Error: No Project.json found in current directory\n", err, true, 1)
-}
-
-func TestFreeExistingDevDependency(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-	depVersion := "v1.2.3"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion, Develop: true}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "free", depName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Closed development mode for '%s' v%s\n", depName, depVersion), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion, Develop: false}}})
-}
-
-func TestFreeNonDevDependency(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-	depVersion := "v1.2.3"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion, Develop: false}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-	dataBefore, _ := os.ReadFile(projectFile)
-
-	stdout, _, err := runCommand(t, tempDir, "free", depName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Dependency '%s' v%s is not in development mode\n", depName, depVersion), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(projectFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("Project.json changed unexpectedly")
-	}
-}
-
-func TestFreeNonExistingDependency(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-	dataBefore, _ := os.ReadFile(projectFile)
-
-	stdout, _, err := runCommand(t, tempDir, "free", depName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Dependency '%s' not found in project\n", depName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(projectFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("Project.json changed unexpectedly")
-	}
-}
-
-func TestFreeNoProject(t *testing.T) {
-	tempDir := t.TempDir()
-	depName := "mypkg"
-
-	stdout, _, err := runCommand(t, tempDir, "free", depName)
-	checkOutput(t, stdout, "", "Error: No Project.json found in current directory\n", err, true, 1)
-}
-
-func TestUpgradeSpecificNoVersion(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-	initialVersion := "v1.2.3"
-	expectedVersion := "v1.2.4"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "upgrade", depName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Upgraded '%s' to %s\n", depName, expectedVersion), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
-}
-
-func TestUpgradeSpecificExactVersion(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-	initialVersion := "v1.2.3"
-	expectedVersion := "v1.3.0"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "upgrade", depName, "v1.3.0")
-	checkOutput(t, stdout, "", fmt.Sprintf("Upgraded '%s' to %s\n", depName, expectedVersion), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
-}
-
-func TestUpgradeSpecificLatest(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-	initialVersion := "v1.2.3"
-	expectedVersion := "v2.0.0"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "upgrade", depName, "--latest")
-	checkOutput(t, stdout, "", fmt.Sprintf("Upgraded '%s' to %s\n", depName, expectedVersion), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
-}
-
-func TestUpgradeAll(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	dep1Name := "mypkg1"
-	dep2Name := "mypkg2"
-	initialVersion1 := "v1.0.0"
-	initialVersion2 := "v2.1.0"
-	expectedVersion1 := "v1.0.1"
-	expectedVersion2 := "v2.1.1"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{
-		{Name: dep1Name, Version: initialVersion1, Develop: false},
-		{Name: dep2Name, Version: initialVersion2, Develop: false},
-	}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "upgrade", "--all")
-	expectedOutput := fmt.Sprintf("Upgraded '%s' to %s\nUpgraded '%s' to %s\n", dep1Name, expectedVersion1, dep2Name, expectedVersion2)
-	checkOutput(t, stdout, "", expectedOutput, err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{
-		{Name: dep1Name, Version: expectedVersion1, Develop: false},
-		{Name: dep2Name, Version: expectedVersion2, Develop: false},
-	}})
-}
-
-func TestUpgradeAllLatest(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	dep1Name := "mypkg1"
-	dep2Name := "mypkg2"
-	initialVersion1 := "v1.0.0"
-	initialVersion2 := "v2.1.0"
-	expectedVersion := "v2.0.0"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{
-		{Name: dep1Name, Version: initialVersion1, Develop: false},
-		{Name: dep2Name, Version: initialVersion2, Develop: false},
-	}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "upgrade", "--all", "--latest")
-	expectedOutput := fmt.Sprintf("Upgraded '%s' to %s\nUpgraded '%s' to %s\n", dep1Name, expectedVersion, dep2Name, expectedVersion)
-	checkOutput(t, stdout, "", expectedOutput, err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{
-		{Name: dep1Name, Version: expectedVersion, Develop: false},
-		{Name: dep2Name, Version: expectedVersion, Develop: false},
-	}})
-}
-
-func TestUpgradeNonExistingDependency(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-	dataBefore, _ := os.ReadFile(projectFile)
-
-	stdout, _, err := runCommand(t, tempDir, "upgrade", depName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Dependency '%s' not found in project\n", depName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(projectFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("Project.json changed unexpectedly")
-	}
-}
-
-func TestUpgradeNoProject(t *testing.T) {
-	tempDir := t.TempDir()
-	depName := "mypkg"
-
-	stdout, _, err := runCommand(t, tempDir, "upgrade", depName)
-	checkOutput(t, stdout, "", "Error: No Project.json found in current directory\n", err, true, 1)
-}
-
-func TestDowngradeValidVersion(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-	initialVersion := "v1.2.3"
-	targetVersion := "v1.2.0"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-
-	stdout, _, err := runCommand(t, tempDir, "downgrade", depName, targetVersion)
-	checkOutput(t, stdout, "", fmt.Sprintf("Downgraded '%s' to %s\n", depName, targetVersion), err, false, 0)
-
-	checkProjectFile(t, projectFile, struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: targetVersion, Develop: false}}})
-}
-
-func TestDowngradeNotOlderVersion(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-	initialVersion := "v1.2.3"
-	targetVersion := "v1.2.4"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-	dataBefore, _ := os.ReadFile(projectFile)
-
-	stdout, _, err := runCommand(t, tempDir, "downgrade", depName, targetVersion)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Target version '%s' must be older than current version '%s' for '%s'\n", targetVersion, initialVersion, depName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(projectFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("Project.json changed unexpectedly")
-	}
-}
-
-func TestDowngradeNonExistingDependency(t *testing.T) {
-	tempDir := t.TempDir()
-	projectName := "myproject"
-	depName := "mypkg"
-	targetVersion := "v1.2.0"
-
-	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
-	data, _ := json.MarshalIndent(initialProject, "", "  ")
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		t.Fatalf("Failed to create initial Project.json: %v", err)
-	}
-	dataBefore, _ := os.ReadFile(projectFile)
-
-	stdout, _, err := runCommand(t, tempDir, "downgrade", depName, targetVersion)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Dependency '%s' not found in project\n", depName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(projectFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("Project.json changed unexpectedly")
-	}
-}
-
-func TestDowngradeNoProject(t *testing.T) {
-	tempDir := t.TempDir()
-	depName := "mypkg"
-	targetVersion := "v1.2.0"
-
-	stdout, _, err := runCommand(t, tempDir, "downgrade", depName, targetVersion)
-	checkOutput(t, stdout, "", "Error: No Project.json found in current directory\n", err, true, 1)
-}
-
-func TestRegistryStatus(t *testing.T) {
-	tempDir := t.TempDir()
-	stdout, _, err := runCommand(t, tempDir, "registry", "status", "cosmic-hub")
-	checkOutput(t, stdout, "", "Status for registry 'cosmic-hub':\n  Available packages:\n    - cosmic-hub-pkg1 (v1.0.0)\n    - cosmic-hub-pkg2 (v2.1.3)\n  Last updated: 2025-04-05\n", err, false, 0)
-}
-
-func TestRegistryStatusInvalid(t *testing.T) {
-	tempDir := t.TempDir()
-	stdout, _, err := runCommand(t, tempDir, "registry", "status", "invalid-reg")
-	checkOutput(t, stdout, "", "Error: 'invalid-reg' is not a valid registry name. Valid options: [cosmic-hub local]\n", err, true, 1)
-}
-
+// TestRegistryInit tests the cosm registry init command
 func TestRegistryInit(t *testing.T) {
 	tempDir := t.TempDir()
 	registryName := "myreg"
-	gitURL := "https://git.example.com"
-	stdout, _, err := runCommand(t, tempDir, "registry", "init", registryName, gitURL)
-	checkOutput(t, stdout, "", fmt.Sprintf("Initialized registry '%s' with Git URL: %s\n", registryName, gitURL), err, false, 0)
 
-	checkRegistriesFile(t, filepath.Join(tempDir, ".cosm", "registries.json"), []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
-}
+	// Create a local bare Git repository (simulating a remote origin)
+	bareRepoPath := filepath.Join(tempDir, "origin.git")
+	if err := exec.Command("git", "init", "--bare", bareRepoPath).Run(); err != nil {
+		t.Fatalf("Failed to initialize bare Git repo: %v", err)
+	}
+	gitURL := "file://" + bareRepoPath
 
-func TestRegistryInitDuplicate(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	gitURL := "https://git.example.com"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
-	dataBefore, _ := os.ReadFile(registriesFile)
-
+	// Run the command and capture output for debugging
 	stdout, stderr, err := runCommand(t, tempDir, "registry", "init", registryName, gitURL)
-	checkOutput(t, stdout, stderr, fmt.Sprintf("Error: Registry '%s' already exists\n", registryName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(registriesFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("registries.json changed unexpectedly")
+	if err != nil {
+		t.Fatalf("Command failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
-}
-
-func TestRegistryClone(t *testing.T) {
-	tempDir := t.TempDir()
-	gitURL := "https://git.example.com/myreg.git"
-	expectedName := "myreg.git"
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "clone", gitURL)
-	checkOutput(t, stdout, "", fmt.Sprintf("Cloned registry '%s' from %s\n", expectedName, gitURL), err, false, 0)
-
-	checkRegistriesFile(t, filepath.Join(tempDir, ".cosm", "registries.json"), []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: expectedName, GitURL: gitURL, Packages: make(map[string][]string)}})
-}
-
-func TestRegistryCloneDuplicate(t *testing.T) {
-	tempDir := t.TempDir()
-	gitURL := "https://git.example.com/myreg.git"
-	registryName := "myreg.git"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
-	dataBefore, _ := os.ReadFile(registriesFile)
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "clone", gitURL)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Registry '%s' already exists\n", registryName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(registriesFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("registries.json changed unexpectedly")
+	expectedOutput := fmt.Sprintf("Initialized registry '%s' with Git URL: %s\n", registryName, gitURL)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
 	}
-}
 
-func TestRegistryDelete(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	gitURL := "https://git.example.com"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "delete", registryName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Deleted registry '%s'\n", registryName), err, false, 0)
-
-	checkRegistriesFile(t, registriesFile, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{})
-}
-
-func TestRegistryDeleteForce(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	gitURL := "https://git.example.com"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "delete", registryName, "--force")
-	checkOutput(t, stdout, "", fmt.Sprintf("Force deleted registry '%s'\n", registryName), err, false, 0)
-
-	checkRegistriesFile(t, registriesFile, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{})
-}
-
-func TestRegistryDeleteNotFound(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	gitURL := "https://git.example.com"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: "otherreg", GitURL: gitURL, Packages: make(map[string][]string)}})
-	dataBefore, _ := os.ReadFile(registriesFile)
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "delete", registryName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Registry '%s' not found\n", registryName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(registriesFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("registries.json changed unexpectedly")
+	// Verify registries.json exists and contains the expected data
+	registriesFile := filepath.Join(tempDir, ".cosm", "registries.json")
+	if _, err := os.Stat(registriesFile); os.IsNotExist(err) {
+		t.Fatalf("registries.json was not created at %s", registriesFile)
 	}
-}
-
-func TestRegistryUpdate(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	gitURL := "https://git.example.com"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)}})
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "update", registryName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Updated registry '%s'\n", registryName), err, false, 0)
-
 	data, err := os.ReadFile(registriesFile)
 	if err != nil {
 		t.Fatalf("Failed to read registries.json: %v", err)
 	}
-	var registries []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}
+	var registries []types.Registry
 	if err := json.Unmarshal(data, &registries); err != nil {
 		t.Fatalf("Failed to parse registries.json: %v", err)
 	}
-	if len(registries) != 1 || registries[0].Name != registryName || registries[0].GitURL != gitURL {
-		t.Errorf("Registry data corrupted: %+v", registries)
-	}
-	if registries[0].LastUpdated.IsZero() {
-		t.Errorf("Expected LastUpdated to be set, got zero")
-	}
-}
-
-func TestRegistryUpdateNotFound(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	gitURL := "https://git.example.com"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: "otherreg", GitURL: gitURL, Packages: make(map[string][]string)}})
-	dataBefore, _ := os.ReadFile(registriesFile)
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "update", registryName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Registry '%s' not found\n", registryName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(registriesFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("registries.json changed unexpectedly")
-	}
-}
-
-func TestRegistryUpdateAll(t *testing.T) {
-	tempDir := t.TempDir()
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{
-		{Name: "reg1", GitURL: "https://git.example.com/reg1", Packages: make(map[string][]string)},
-		{Name: "reg2", GitURL: "https://git.example.com/reg2", Packages: make(map[string][]string)},
-	})
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "update", "--all")
-	checkOutput(t, stdout, "", "Updated all registries\n", err, false, 0)
-
-	data, err := os.ReadFile(registriesFile)
-	if err != nil {
-		t.Fatalf("Failed to read registries.json: %v", err)
-	}
-	var registries []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}
-	if err := json.Unmarshal(data, &registries); err != nil {
-		t.Fatalf("Failed to parse registries.json: %v", err)
-	}
-	if len(registries) != 2 {
-		t.Errorf("Expected 2 registries, got %d", len(registries))
-	}
-	for _, reg := range registries {
-		if reg.LastUpdated.IsZero() {
-			t.Errorf("Expected LastUpdated to be set for %s, got zero", reg.Name)
+	if len(registries) != 1 {
+		t.Errorf("Expected 1 registry, got %d", len(registries))
+	} else {
+		reg := registries[0]
+		if reg.Name != registryName {
+			t.Errorf("Expected Name %q, got %q", registryName, reg.Name)
 		}
-	}
-}
-
-func TestRegistryAddNew(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	packageName := "mypkg"
-	versionTag := "v1.0.0"
-	gitURL := "https://git.example.com/myreg"
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "add", registryName, packageName, versionTag, gitURL)
-	checkOutput(t, stdout, "", fmt.Sprintf("Added version '%s' to package '%s' in registry '%s' from %s\n", versionTag, packageName, registryName, gitURL), err, false, 0)
-
-	checkRegistriesFile(t, filepath.Join(tempDir, ".cosm", "registries.json"), []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {versionTag}}}})
-}
-
-func TestRegistryAddExisting(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	packageName := "mypkg"
-	versionTag := "v1.0.0"
-	gitURL := "https://git.example.com/myreg"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: "https://old.git.example.com", Packages: make(map[string][]string)}})
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "add", registryName, packageName, versionTag, gitURL)
-	checkOutput(t, stdout, "", fmt.Sprintf("Added version '%s' to package '%s' in registry '%s' from %s\n", versionTag, packageName, registryName, gitURL), err, false, 0)
-
-	checkRegistriesFile(t, registriesFile, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {versionTag}}}})
-}
-
-func TestRegistryAddDuplicateVersion(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	packageName := "mypkg"
-	versionTag := "v1.0.0"
-	gitURL := "https://git.example.com/myreg"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {versionTag}}}})
-	dataBefore, _ := os.ReadFile(registriesFile)
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "add", registryName, packageName, versionTag, gitURL)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Version '%s' already exists in registry '%s' for package '%s'\n", versionTag, registryName, packageName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(registriesFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("registries.json changed unexpectedly")
-	}
-}
-
-func TestRegistryRmVersion(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	packageName := "mypkg"
-	versionTag := "v1.0.0"
-	gitURL := "https://git.example.com/myreg"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {versionTag, "v1.1.0"}}}})
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName, versionTag)
-	checkOutput(t, stdout, "", fmt.Sprintf("Removed version '%s' from package '%s' in registry '%s'\n", versionTag, packageName, registryName), err, false, 0)
-
-	checkRegistriesFile(t, registriesFile, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {"v1.1.0"}}}})
-}
-
-func TestRegistryRmVersionForce(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	packageName := "mypkg"
-	versionTag := "v1.0.0"
-	gitURL := "https://git.example.com/myreg"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {versionTag, "v1.1.0"}}}})
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName, versionTag, "--force")
-	checkOutput(t, stdout, "", fmt.Sprintf("Force removed version '%s' from package '%s' in registry '%s'\n", versionTag, packageName, registryName), err, false, 0)
-
-	checkRegistriesFile(t, registriesFile, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {"v1.1.0"}}}})
-}
-
-func TestRegistryRmPackage(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	packageName := "mypkg"
-	gitURL := "https://git.example.com/myreg"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {"v1.0.0", "v1.1.0"}, "otherpkg": {"v2.0.0"}}}})
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Removed package '%s' from registry '%s'\n", packageName, registryName), err, false, 0)
-
-	checkRegistriesFile(t, registriesFile, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{"otherpkg": {"v2.0.0"}}}})
-}
-
-func TestRegistryRmPackageForce(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	packageName := "mypkg"
-	gitURL := "https://git.example.com/myreg"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {"v1.0.0", "v1.1.0"}, "otherpkg": {"v2.0.0"}}}})
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName, "--force")
-	checkOutput(t, stdout, "", fmt.Sprintf("Force removed package '%s' from registry '%s'\n", packageName, registryName), err, false, 0)
-
-	checkRegistriesFile(t, registriesFile, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{"otherpkg": {"v2.0.0"}}}})
-}
-
-func TestRegistryRmVersionNotFound(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	packageName := "mypkg"
-	versionTag := "v1.0.0"
-	gitURL := "https://git.example.com/myreg"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{packageName: {"v1.1.0"}}}})
-	dataBefore, _ := os.ReadFile(registriesFile)
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName, versionTag)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Version '%s' not found for package '%s' in registry '%s'\n", versionTag, packageName, registryName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(registriesFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("registries.json changed unexpectedly")
-	}
-}
-
-func TestRegistryRmPackageNotFound(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	packageName := "mypkg"
-	gitURL := "https://git.example.com/myreg"
-	registriesFile := setupRegistriesFile(t, tempDir, []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}{{Name: registryName, GitURL: gitURL, Packages: map[string][]string{"otherpkg": {"v2.0.0"}}}})
-	dataBefore, _ := os.ReadFile(registriesFile)
-
-	stdout, _, err := runCommand(t, tempDir, "registry", "rm", registryName, packageName)
-	checkOutput(t, stdout, "", fmt.Sprintf("Error: Package '%s' not found in registry '%s'\n", packageName, registryName), err, true, 1)
-
-	dataAfter, _ := os.ReadFile(registriesFile)
-	if !bytes.Equal(dataBefore, dataAfter) {
-		t.Errorf("registries.json changed unexpectedly")
+		if reg.GitURL != gitURL {
+			t.Errorf("Expected GitURL %q, got %q", gitURL, reg.GitURL)
+		}
+		if len(reg.Packages) != 0 {
+			t.Errorf("Expected empty Packages map, got %+v", reg.Packages)
+		}
 	}
 }

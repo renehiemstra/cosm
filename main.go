@@ -84,11 +84,13 @@ func main() {
 		Args:  cobra.ExactArgs(1),
 		Run:   commands.Init,
 	}
+	initCmd.Flags().StringP("language", "l", "", "Specify the project language (e.g., lua, terra)")
+	initCmd.Flags().StringP("version", "v", "", "Specify the initial version (default: v0.1.0)")
 
 	var addCmd = &cobra.Command{
-		Use:   "add [name] v<version>",
+		Use:   "add <package_name>@v<version_number>",
 		Short: "Add a dependency to the project",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.ExactArgs(1),
 		Run:   commands.Add,
 	}
 
