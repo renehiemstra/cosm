@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cosm/types"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -143,9 +144,9 @@ func checkRegistriesFile(t *testing.T, file string, expected []struct {
 
 // checkProjectFile verifies the contents of Project.json
 func checkProjectFile(t *testing.T, file string, expected struct {
-	Name         string       `json:"name"`
-	Version      string       `json:"version"`
-	Dependencies []Dependency `json:"dependencies,omitempty"`
+	Name         string             `json:"name"`
+	Version      string             `json:"version"`
+	Dependencies []types.Dependency `json:"dependencies,omitempty"`
 }) {
 	t.Helper()
 	data, err := os.ReadFile(file)
@@ -153,9 +154,9 @@ func checkProjectFile(t *testing.T, file string, expected struct {
 		t.Fatalf("Failed to read Project.json: %v", err)
 	}
 	var project struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}
 	if err := json.Unmarshal(data, &project); err != nil {
 		t.Fatalf("Failed to parse Project.json: %v", err)
@@ -214,9 +215,9 @@ func TestInit(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Initialized project '%s' with version v0.1.0\n", packageName), err, false, 0)
 
 	checkProjectFile(t, filepath.Join(tempDir, "Project.json"), struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: packageName, Version: "v0.1.0"})
 }
 
@@ -226,9 +227,9 @@ func TestInitDuplicate(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: "existing", Version: "v0.1.0"}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
@@ -253,9 +254,9 @@ func TestAdd(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: "v0.1.0"}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
@@ -266,10 +267,10 @@ func TestAdd(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Added dependency '%s' v%s to project\n", depName, depVersion), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: depVersion}}})
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion}}})
 }
 
 func TestAddNoProject(t *testing.T) {
@@ -289,9 +290,9 @@ func TestAddInvalidVersion(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: "v0.1.0"}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
@@ -315,10 +316,10 @@ func TestRm(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: "v1.2.3"}, {Name: "otherpkg", Version: "v2.0.0"}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: "v1.2.3"}, {Name: "otherpkg", Version: "v2.0.0"}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -328,10 +329,10 @@ func TestRm(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Removed dependency '%s' from project\n", depName), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: "otherpkg", Version: "v2.0.0"}}})
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0"}}})
 }
 
 func TestRmNoProject(t *testing.T) {
@@ -349,10 +350,10 @@ func TestRmDependencyNotFound(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: "otherpkg", Version: "v2.0.0"}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0"}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -375,9 +376,9 @@ func TestReleaseExplicit(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: "v0.1.0"}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
@@ -388,9 +389,9 @@ func TestReleaseExplicit(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Released '%s' v%s\n", projectName, newVersion), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: newVersion})
 }
 
@@ -401,9 +402,9 @@ func TestReleasePatch(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: "v0.1.0"}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
@@ -414,9 +415,9 @@ func TestReleasePatch(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Released '%s' v%s\n", projectName, newVersion), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: newVersion})
 }
 
@@ -427,9 +428,9 @@ func TestReleaseMinor(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: "v0.1.0"}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
@@ -440,9 +441,9 @@ func TestReleaseMinor(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Released '%s' v%s\n", projectName, newVersion), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: newVersion})
 }
 
@@ -453,9 +454,9 @@ func TestReleaseMajor(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: "v0.1.0"}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
@@ -466,9 +467,9 @@ func TestReleaseMajor(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Released '%s' v%s\n", projectName, newVersion), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: newVersion})
 }
 
@@ -487,9 +488,9 @@ func TestReleaseInvalidVersion(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: "v0.1.0"}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
@@ -513,9 +514,9 @@ func TestReleaseNotGreater(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: "v0.1.0"}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
@@ -538,9 +539,9 @@ func TestReleaseNoArgs(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
 	}{Name: projectName, Version: "v0.1.0"}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
@@ -565,10 +566,10 @@ func TestDevelopExistingDependency(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: depVersion, Develop: false}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion, Develop: false}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -578,10 +579,10 @@ func TestDevelopExistingDependency(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Switched '%s' v%s to development mode\n", depName, depVersion), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: depVersion, Develop: true}}})
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion, Develop: true}}})
 }
 
 func TestDevelopNonExistingDependency(t *testing.T) {
@@ -591,10 +592,10 @@ func TestDevelopNonExistingDependency(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -626,10 +627,10 @@ func TestFreeExistingDevDependency(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: depVersion, Develop: true}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion, Develop: true}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -639,10 +640,10 @@ func TestFreeExistingDevDependency(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Closed development mode for '%s' v%s\n", depName, depVersion), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: depVersion, Develop: false}}})
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion, Develop: false}}})
 }
 
 func TestFreeNonDevDependency(t *testing.T) {
@@ -653,10 +654,10 @@ func TestFreeNonDevDependency(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: depVersion, Develop: false}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: depVersion, Develop: false}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -679,10 +680,10 @@ func TestFreeNonExistingDependency(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -715,10 +716,10 @@ func TestUpgradeSpecificNoVersion(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -728,10 +729,10 @@ func TestUpgradeSpecificNoVersion(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Upgraded '%s' to %s\n", depName, expectedVersion), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
 }
 
 func TestUpgradeSpecificExactVersion(t *testing.T) {
@@ -743,10 +744,10 @@ func TestUpgradeSpecificExactVersion(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -756,10 +757,10 @@ func TestUpgradeSpecificExactVersion(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Upgraded '%s' to %s\n", depName, expectedVersion), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
 }
 
 func TestUpgradeSpecificLatest(t *testing.T) {
@@ -771,10 +772,10 @@ func TestUpgradeSpecificLatest(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -784,10 +785,10 @@ func TestUpgradeSpecificLatest(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Upgraded '%s' to %s\n", depName, expectedVersion), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: expectedVersion, Develop: false}}})
 }
 
 func TestUpgradeAll(t *testing.T) {
@@ -802,10 +803,10 @@ func TestUpgradeAll(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{
 		{Name: dep1Name, Version: initialVersion1, Develop: false},
 		{Name: dep2Name, Version: initialVersion2, Develop: false},
 	}}
@@ -819,10 +820,10 @@ func TestUpgradeAll(t *testing.T) {
 	checkOutput(t, stdout, "", expectedOutput, err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{
 		{Name: dep1Name, Version: expectedVersion1, Develop: false},
 		{Name: dep2Name, Version: expectedVersion2, Develop: false},
 	}})
@@ -839,10 +840,10 @@ func TestUpgradeAllLatest(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{
 		{Name: dep1Name, Version: initialVersion1, Develop: false},
 		{Name: dep2Name, Version: initialVersion2, Develop: false},
 	}}
@@ -856,10 +857,10 @@ func TestUpgradeAllLatest(t *testing.T) {
 	checkOutput(t, stdout, "", expectedOutput, err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{
 		{Name: dep1Name, Version: expectedVersion, Develop: false},
 		{Name: dep2Name, Version: expectedVersion, Develop: false},
 	}})
@@ -872,10 +873,10 @@ func TestUpgradeNonExistingDependency(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -908,10 +909,10 @@ func TestDowngradeValidVersion(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -921,10 +922,10 @@ func TestDowngradeValidVersion(t *testing.T) {
 	checkOutput(t, stdout, "", fmt.Sprintf("Downgraded '%s' to %s\n", depName, targetVersion), err, false, 0)
 
 	checkProjectFile(t, projectFile, struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: targetVersion, Develop: false}}})
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: targetVersion, Develop: false}}})
 }
 
 func TestDowngradeNotOlderVersion(t *testing.T) {
@@ -936,10 +937,10 @@ func TestDowngradeNotOlderVersion(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: depName, Version: initialVersion, Develop: false}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -963,10 +964,10 @@ func TestDowngradeNonExistingDependency(t *testing.T) {
 
 	projectFile := filepath.Join(tempDir, "Project.json")
 	initialProject := struct {
-		Name         string       `json:"name"`
-		Version      string       `json:"version"`
-		Dependencies []Dependency `json:"dependencies,omitempty"`
-	}{Name: projectName, Version: "v0.1.0", Dependencies: []Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
+		Name         string             `json:"name"`
+		Version      string             `json:"version"`
+		Dependencies []types.Dependency `json:"dependencies,omitempty"`
+	}{Name: projectName, Version: "v0.1.0", Dependencies: []types.Dependency{{Name: "otherpkg", Version: "v2.0.0", Develop: false}}}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
