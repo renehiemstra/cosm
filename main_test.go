@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"cosm/types"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,7 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
+	"cosm/types"
 
 	"github.com/google/uuid"
 )
@@ -61,51 +61,99 @@ func checkOutput(t *testing.T, stdout, stderr, expectedOutput string, err error,
 		}
 	}
 	if stdout != expectedOutput {
-		t.Errorf("Expected output %q, got %q", expectedOutput, stdout)
+		t.Errorf("Expected output %q, got %q (stderr: %q)", expectedOutput, stdout, stderr)
 	}
 }
 
-// setupRegistriesFile creates a registries.json with given registries
-func setupRegistriesFile(t *testing.T, dir string, registries []struct {
-	Name        string              `json:"name"`
-	GitURL      string              `json:"giturl"`
-	Packages    map[string][]string `json:"packages,omitempty"`
-	LastUpdated time.Time           `json:"last_updated,omitempty"`
-}) string {
-	t.Helper()
-	cosmDir := filepath.Join(dir, ".cosm")
-	if err := os.MkdirAll(cosmDir, 0755); err != nil {
-		t.Fatalf("Failed to create .cosm directory: %v", err)
-	}
-	registriesFile := filepath.Join(cosmDir, "registries.json")
-	data, err := json.MarshalIndent(registries, "", "  ")
-	if err != nil {
-		t.Fatalf("Failed to marshal registries: %v", err)
-	}
-	if err := os.WriteFile(registriesFile, data, 0644); err != nil {
-		t.Fatalf("Failed to write registries.json: %v", err)
-	}
-	return registriesFile
-}
-
-// checkRegistriesFile verifies the contents of registries.json
-func checkRegistriesFile(t *testing.T, file string, expected []struct {
-	Name        string              `json:"name"`
-	GitURL      string              `json:"giturl"`
-	Packages    map[string][]string `json:"packages,omitempty"`
-	LastUpdated time.Time           `json:"last_updated,omitempty"`
-}) {
+// checkProjectFile verifies the contents of Project.json, including UUID
+func checkProjectFile(t *testing.T, file string, expected types.Project) {
 	t.Helper()
 	data, err := os.ReadFile(file)
 	if err != nil {
+		t.Fatalf("Failed to read Project.json: %v", err)
+	}
+	var project types.Project
+	if err := json.Unmarshal(data, &project); err != nil {
+		t.Fatalf("Failed to parse Project.json: %v", err)
+	}
+	if project.Name != expected.Name {
+		t.Errorf("Expected Name %q, got %q", expected.Name, project.Name)
+	}
+	if project.Version != expected.Version {
+		t.Errorf("Expected Version %q, got %q", expected.Version, project.Version)
+	}
+	if project.Language != expected.Language {
+		t.Errorf("Expected Language %q, got %q", expected.Language, project.Language)
+	}
+	if len(project.Authors) != len(expected.Authors) {
+		t.Errorf("Expected %d authors, got %d", len(expected.Authors), len(project.Authors))
+	} else {
+		for i, expAuthor := range expected.Authors {
+			if project.Authors[i] != expAuthor {
+				t.Errorf("Expected author %d: %q, got %q", i, expAuthor, project.Authors[i])
+			}
+		}
+	}
+	if len(project.Deps) != len(expected.Deps) {
+		t.Errorf("Expected %d dependencies, got %d", len(expected.Deps), len(project.Deps))
+	} else {
+		for depName, expVersion := range expected.Deps {
+			gotVersion, exists := project.Deps[depName]
+			if !exists || gotVersion != expVersion {
+				t.Errorf("Expected dep %q: %q, got %q", depName, expVersion, gotVersion)
+			}
+		}
+	}
+	if project.UUID == "" {
+		t.Errorf("Expected non-empty UUID, got empty")
+	} else if _, err := uuid.Parse(project.UUID); err != nil {
+		t.Errorf("Expected valid UUID, got %q: %v", project.UUID, err)
+	}
+}
+
+// setupTempGitConfig creates a temporary Git config file and sets mock values
+func setupTempGitConfig(t *testing.T, tempDir string) string {
+	t.Helper()
+	tempGitConfig := filepath.Join(tempDir, "gitconfig")
+	if err := os.WriteFile(tempGitConfig, []byte(""), 0644); err != nil {
+		t.Fatalf("Failed to create temporary Git config file: %v", err)
+	}
+	os.Setenv("GIT_CONFIG_GLOBAL", tempGitConfig)
+	t.Cleanup(func() { os.Unsetenv("GIT_CONFIG_GLOBAL") }) // Clean up after test
+
+	// Set mock git config
+	cmdName := exec.Command("git", "config", "--file", tempGitConfig, "user.name", "testuser")
+	cmdEmail := exec.Command("git", "config", "--file", tempGitConfig, "user.email", "testuser@git.com")
+	if err := cmdName.Run(); err != nil {
+		t.Fatalf("Failed to set git user.name in temp config: %v", err)
+	}
+	if err := cmdEmail.Run(); err != nil {
+		t.Fatalf("Failed to set git user.email in temp config: %v", err)
+	}
+	return tempGitConfig
+}
+
+// createBareRepo creates a bare Git repository in the given directory and returns its file:// URL
+func createBareRepo(t *testing.T, dir string, name string) string {
+	t.Helper()
+	bareRepoPath := filepath.Join(dir, name)
+	if err := exec.Command("git", "init", "--bare", bareRepoPath).Run(); err != nil {
+		t.Fatalf("Failed to initialize bare Git repo at %s: %v", bareRepoPath, err)
+	}
+	return "file://" + bareRepoPath
+}
+
+// checkRegistriesFile verifies the contents of registries.json
+func checkRegistriesFile(t *testing.T, registriesFile string, expected []types.Registry) {
+	t.Helper()
+	if _, err := os.Stat(registriesFile); os.IsNotExist(err) {
+		t.Fatalf("registries.json was not created at %s", registriesFile)
+	}
+	data, err := os.ReadFile(registriesFile)
+	if err != nil {
 		t.Fatalf("Failed to read registries.json: %v", err)
 	}
-	var registries []struct {
-		Name        string              `json:"name"`
-		GitURL      string              `json:"giturl"`
-		Packages    map[string][]string `json:"packages,omitempty"`
-		LastUpdated time.Time           `json:"last_updated,omitempty"`
-	}
+	var registries []types.Registry
 	if err := json.Unmarshal(data, &registries); err != nil {
 		t.Fatalf("Failed to parse registries.json: %v", err)
 	}
@@ -117,68 +165,14 @@ func checkRegistriesFile(t *testing.T, file string, expected []struct {
 			break
 		}
 		got := registries[i]
-		if got.Name != exp.Name || got.GitURL != exp.GitURL {
-			t.Errorf("Expected registry %d: {Name: %q, GitURL: %q}, got {Name: %q, GitURL: %q}",
-				i, exp.Name, exp.GitURL, got.Name, got.GitURL)
+		if got.Name != exp.Name {
+			t.Errorf("Expected registry %d Name %q, got %q", i, exp.Name, got.Name)
+		}
+		if got.GitURL != exp.GitURL {
+			t.Errorf("Expected registry %d GitURL %q, got %q", i, exp.GitURL, got.GitURL)
 		}
 		if len(got.Packages) != len(exp.Packages) {
-			t.Errorf("Expected %d packages for %s, got %d", len(exp.Packages), exp.Name, len(got.Packages))
-		}
-		for pkgName, expVersions := range exp.Packages {
-			gotVersions, exists := got.Packages[pkgName]
-			if !exists {
-				t.Errorf("Package %s not found in registry %s", pkgName, exp.Name)
-				continue
-			}
-			if len(gotVersions) != len(expVersions) {
-				t.Errorf("Expected %d versions for %s in %s, got %d", len(expVersions), pkgName, exp.Name, len(gotVersions))
-			}
-			for j, v := range expVersions {
-				if j >= len(gotVersions) || gotVersions[j] != v {
-					t.Errorf("Expected version %d for %s in %s: %q, got %q", j, pkgName, exp.Name, v, gotVersions[j])
-				}
-			}
-		}
-		if !exp.LastUpdated.IsZero() && got.LastUpdated.IsZero() {
-			t.Errorf("Expected LastUpdated to be set for %s, got zero", exp.Name)
-		}
-	}
-}
-
-// checkProjectFile verifies the contents of Project.json
-func checkProjectFile(t *testing.T, file string, expected struct {
-	Name         string             `json:"name"`
-	Version      string             `json:"version"`
-	Dependencies []types.Dependency `json:"dependencies,omitempty"`
-}) {
-	t.Helper()
-	data, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatalf("Failed to read Project.json: %v", err)
-	}
-	var project struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}
-	if err := json.Unmarshal(data, &project); err != nil {
-		t.Fatalf("Failed to parse Project.json: %v", err)
-	}
-	if project.Name != expected.Name || project.Version != expected.Version {
-		t.Errorf("Expected Project {Name: %q, Version: %q}, got {Name: %q, Version: %q}",
-			expected.Name, expected.Version, project.Name, project.Version)
-	}
-	if len(project.Dependencies) != len(expected.Dependencies) {
-		t.Errorf("Expected %d dependencies, got %d", len(expected.Dependencies), len(project.Dependencies))
-	}
-	for i, expDep := range expected.Dependencies {
-		if i >= len(project.Dependencies) {
-			break
-		}
-		gotDep := project.Dependencies[i]
-		if gotDep.Name != expDep.Name || gotDep.Version != expDep.Version {
-			t.Errorf("Expected dependency %d: {Name: %q, Version: %q}, got {Name: %q, Version: %q}",
-				i, expDep.Name, expDep.Version, gotDep.Name, gotDep.Version)
+			t.Errorf("Expected registry %d Packages len %d, got %d", i, len(exp.Packages), len(got.Packages))
 		}
 	}
 }
@@ -210,91 +204,37 @@ func TestActivateFailure(t *testing.T) {
 	checkOutput(t, stdout, "", "Error: No project found in current directory (missing cosm.json)\n", err, true, 1)
 }
 
-// TestInit tests the cosm init command with isolated Git config
 func TestInit(t *testing.T) {
 	tempDir := t.TempDir()
 	packageName := "myproject"
 
-	// Create a temporary Git config file
-	tempGitConfig := filepath.Join(tempDir, "gitconfig")
-	if err := os.WriteFile(tempGitConfig, []byte(""), 0644); err != nil {
-		t.Fatalf("Failed to create temporary Git config file: %v", err)
-	}
-
-	// Set GIT_CONFIG_GLOBAL to isolate Git config changes
-	os.Setenv("GIT_CONFIG_GLOBAL", tempGitConfig)
-	defer os.Unsetenv("GIT_CONFIG_GLOBAL") // Clean up after test
-
-	// Set mock git config in the temporary file
-	cmdName := exec.Command("git", "config", "--file", tempGitConfig, "user.name", "testuser")
-	cmdEmail := exec.Command("git", "config", "--file", tempGitConfig, "user.email", "testuser@git.com")
-	if err := cmdName.Run(); err != nil {
-		t.Fatalf("Failed to set git user.name in temp config: %v", err)
-	}
-	if err := cmdEmail.Run(); err != nil {
-		t.Fatalf("Failed to set git user.email in temp config: %v", err)
-	}
+	// Setup temporary Git config
+	_ = setupTempGitConfig(t, tempDir)
 
 	// Run the command
-	stdout, _, err := runCommand(t, tempDir, "init", packageName)
+	stdout, stderr, err := runCommand(t, tempDir, "init", packageName)
 	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
+		t.Fatalf("Command failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
 	expectedOutputPrefix := fmt.Sprintf("Initialized project '%s' with version v0.1.0 and UUID ", packageName)
 	if !strings.HasPrefix(stdout, expectedOutputPrefix) {
-		t.Errorf("Expected output to start with %q, got %q", expectedOutputPrefix, stdout)
+		t.Errorf("Expected output to start with %q, got %q\nStderr: %s", expectedOutputPrefix, stdout, stderr)
 	}
 
-	// Determine expected author based on the temporary git config
-	expectedAuthor := "[unknown]unknown@author.com"
-	name, errName := exec.Command("git", "config", "--file", tempGitConfig, "user.name").Output()
-	email, errEmail := exec.Command("git", "config", "--file", tempGitConfig, "user.email").Output()
-	if errName == nil && errEmail == nil && len(name) > 0 && len(email) > 0 {
-		expectedAuthor = fmt.Sprintf("[%s]%s", strings.TrimSpace(string(name)), strings.TrimSpace(string(email)))
-	}
+	// Expected author from temp config
+	expectedAuthor := "[testuser]testuser@git.com"
 	expectedAuthors := []string{expectedAuthor}
 
-	// Check the created Project.json
+	// Check Project.json
 	projectFile := filepath.Join(tempDir, "Project.json")
 	expectedProject := types.Project{
 		Name:     packageName,
 		Authors:  expectedAuthors,
-		Language: "", // Unspecified by default
+		Language: "",
 		Version:  "v0.1.0",
 		Deps:     make(map[string]string),
 	}
-	data, err := os.ReadFile(projectFile)
-	if err != nil {
-		t.Fatalf("Failed to read Project.json: %v", err)
-	}
-	var project types.Project
-	if err := json.Unmarshal(data, &project); err != nil {
-		t.Fatalf("Failed to parse Project.json: %v", err)
-	}
-
-	// Verify fields
-	if project.Name != expectedProject.Name {
-		t.Errorf("Expected Name %q, got %q", expectedProject.Name, project.Name)
-	}
-	if project.Version != expectedProject.Version {
-		t.Errorf("Expected Version %q, got %q", expectedProject.Version, project.Version)
-	}
-	if project.Language != expectedProject.Language {
-		t.Errorf("Expected Language %q, got %q", expectedProject.Language, project.Language)
-	}
-	if len(project.Authors) != len(expectedProject.Authors) || project.Authors[0] != expectedProject.Authors[0] {
-		t.Errorf("Expected Authors %v, got %v", expectedProject.Authors, project.Authors)
-	}
-	if len(project.Deps) != 0 {
-		t.Errorf("Expected empty Deps, got %v", project.Deps)
-	}
-	if project.UUID == "" {
-		t.Errorf("Expected non-empty UUID, got empty")
-	} else {
-		if _, err := uuid.Parse(project.UUID); err != nil {
-			t.Errorf("Expected valid UUID, got %q: %v", project.UUID, err)
-		}
-	}
+	checkProjectFile(t, projectFile, expectedProject)
 }
 
 func TestInitDuplicate(t *testing.T) {
@@ -302,11 +242,13 @@ func TestInitDuplicate(t *testing.T) {
 	packageName := "myproject"
 
 	projectFile := filepath.Join(tempDir, "Project.json")
-	initialProject := struct {
-		Name         string             `json:"name"`
-		Version      string             `json:"version"`
-		Dependencies []types.Dependency `json:"dependencies,omitempty"`
-	}{Name: "existing", Version: "v0.1.0"}
+	initialProject := types.Project{
+		Name:    "existing",
+		UUID:    uuid.New().String(),
+		Authors: []string{"[existing]existing@author.com"},
+		Version: "v0.1.0",
+		Deps:    make(map[string]string),
+	}
 	data, _ := json.MarshalIndent(initialProject, "", "  ")
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		t.Fatalf("Failed to create initial Project.json: %v", err)
@@ -322,19 +264,14 @@ func TestInitDuplicate(t *testing.T) {
 	}
 }
 
-// TestRegistryInit tests the cosm registry init command
 func TestRegistryInit(t *testing.T) {
 	tempDir := t.TempDir()
 	registryName := "myreg"
 
-	// Create a local bare Git repository (simulating a remote origin)
-	bareRepoPath := filepath.Join(tempDir, "origin.git")
-	if err := exec.Command("git", "init", "--bare", bareRepoPath).Run(); err != nil {
-		t.Fatalf("Failed to initialize bare Git repo: %v", err)
-	}
-	gitURL := "file://" + bareRepoPath
+	// Create a local bare Git repository
+	gitURL := createBareRepo(t, tempDir, "origin.git")
 
-	// Run the command and capture output for debugging
+	// Run the command and capture output
 	stdout, stderr, err := runCommand(t, tempDir, "registry", "init", registryName, gitURL)
 	if err != nil {
 		t.Fatalf("Command failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
@@ -344,31 +281,9 @@ func TestRegistryInit(t *testing.T) {
 		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
 	}
 
-	// Verify registries.json exists and contains the expected data
+	// Verify registries.json
 	registriesFile := filepath.Join(tempDir, ".cosm", "registries.json")
-	if _, err := os.Stat(registriesFile); os.IsNotExist(err) {
-		t.Fatalf("registries.json was not created at %s", registriesFile)
-	}
-	data, err := os.ReadFile(registriesFile)
-	if err != nil {
-		t.Fatalf("Failed to read registries.json: %v", err)
-	}
-	var registries []types.Registry
-	if err := json.Unmarshal(data, &registries); err != nil {
-		t.Fatalf("Failed to parse registries.json: %v", err)
-	}
-	if len(registries) != 1 {
-		t.Errorf("Expected 1 registry, got %d", len(registries))
-	} else {
-		reg := registries[0]
-		if reg.Name != registryName {
-			t.Errorf("Expected Name %q, got %q", registryName, reg.Name)
-		}
-		if reg.GitURL != gitURL {
-			t.Errorf("Expected GitURL %q, got %q", gitURL, reg.GitURL)
-		}
-		if len(reg.Packages) != 0 {
-			t.Errorf("Expected empty Packages map, got %+v", reg.Packages)
-		}
-	}
+	checkRegistriesFile(t, registriesFile, []types.Registry{
+		{Name: registryName, GitURL: gitURL, Packages: make(map[string][]string)},
+	})
 }
