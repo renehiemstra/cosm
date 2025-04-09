@@ -1,12 +1,11 @@
 package types
 
-import "time"
-
+// Registry represents a package registry
 type Registry struct {
-	Name        string              `json:"name"`
-	GitURL      string              `json:"giturl"`
-	Packages    map[string][]string `json:"packages,omitempty"`
-	LastUpdated time.Time           `json:"last_updated,omitempty"`
+	Name     string            `json:"name"`
+	UUID     string            `json:"uuid"`
+	GitURL   string            `json:"giturl"`
+	Packages map[string]string `json:"packages"`
 }
 
 type Dependency struct {
@@ -23,4 +22,14 @@ type Project struct {
 	Language string            `json:"language,omitempty"`
 	Version  string            `json:"version"`
 	Deps     map[string]string `json:"deps,omitempty"` // Changed from []Dependency to map[string]string
+}
+
+// Specs represents the metadata for a package version
+type Specs struct {
+	Name    string            `json:"name"`
+	UUID    string            `json:"uuid"`
+	Version string            `json:"version"`
+	GitURL  string            `json:"giturl"`
+	SHA1    string            `json:"sha1"`
+	Deps    map[string]string `json:"deps"`
 }

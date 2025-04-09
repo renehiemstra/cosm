@@ -102,14 +102,15 @@ func main() {
 	}
 
 	var releaseCmd = &cobra.Command{
-		Use:   "release v<version>",
-		Short: "Update the project version",
+		Use:   "release [v<version>]",
+		Short: "Update the project version and publish a release",
 		Args:  cobra.MaximumNArgs(1),
 		Run:   commands.Release,
 	}
 	releaseCmd.Flags().Bool("patch", false, "Increment the patch version")
 	releaseCmd.Flags().Bool("minor", false, "Increment the minor version")
 	releaseCmd.Flags().Bool("major", false, "Increment the major version")
+	releaseCmd.Flags().String("registry", "", "Specify a registry to release to")
 
 	var developCmd = &cobra.Command{
 		Use:   "develop [package-name]",
@@ -149,7 +150,7 @@ func main() {
 
 	var registryStatusCmd = &cobra.Command{
 		Use:   "status [registry-name]",
-		Short: "Show contents of a registry",
+		Short: "Print an overview of packages in a registry",
 		Args:  cobra.ExactArgs(1),
 		Run:   commands.RegistryStatus,
 	}
@@ -185,9 +186,9 @@ func main() {
 	registryUpdateCmd.Flags().Bool("all", false, "Update all registries")
 
 	var registryAddCmd = &cobra.Command{
-		Use:   "add [registry-name] [package-name] v<version> [giturl]",
+		Use:   "add [registry-name] [giturl]",
 		Short: "Register a package version to a registry",
-		Args:  cobra.ExactArgs(4),
+		Args:  cobra.ExactArgs(2),
 		Run:   commands.RegistryAdd,
 	}
 
