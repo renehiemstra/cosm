@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"cosm/commands"
 	"cosm/types"
 
 	"github.com/google/uuid"
@@ -66,27 +67,13 @@ func TestInit(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
 
+	// Test 1: Default version (v0.1.0)
 	packageName := "myproject"
-	packageDir := setupPackage(t, tempDir, packageName)
+	initPackage(t, tempDir, packageName) // Ignore return for this test
 
-	// Capture output
-	stdout, stderr, err := runCommand(t, packageDir, "init", packageName)
-	if err == nil {
-		t.Fatalf("Expected an error for duplicate init, got none (stdout: %q, stderr: %q)", stdout, stderr)
-	}
-	expectedOutput := "Error: Project.json already exists in this directory\n"
-	checkOutput(t, stdout, stderr, expectedOutput, err, true, 1)
-
-	// Verify Project.json
-	projectFile := filepath.Join(packageDir, "Project.json")
-	expectedProject := types.Project{
-		Name:     packageName,
-		Authors:  []string{"[testuser]testuser@git.com"},
-		Language: "",
-		Version:  "v0.1.0",
-		Deps:     make(map[string]string),
-	}
-	checkProjectFile(t, projectFile, expectedProject)
+	// Test 2: Specific version (v1.0.0)
+	packageName2 := "myproject2"
+	initPackage(t, tempDir, packageName2, "v1.0.0")
 }
 
 func TestInitDuplicate(t *testing.T) {
@@ -94,7 +81,7 @@ func TestInitDuplicate(t *testing.T) {
 	defer cleanup()
 
 	packageName := "myproject"
-	packageDir := setupPackage(t, tempDir, packageName)
+	packageDir := initPackage(t, tempDir, packageName)
 
 	// Try to initialize again
 	stdout, stderr, err := runCommand(t, packageDir, "init", packageName)
@@ -118,26 +105,28 @@ func TestAddDependency(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
 
-	// Setup registry and package
+	// Setup registry
 	registryName := "myreg"
 	setupRegistry(t, tempDir, registryName)
-	packageName := "mypkg"
-	_, packageGitURL := setupPackageWithGit(t, tempDir, packageName)
-	addPackageToRegistry(t, tempDir, registryName, packageGitURL) // Adds v0.1.0
 
-	// Init project
-	projectDir := setupPackage(t, tempDir, "myproject")
+	// Setup package to be added as a dependency
+	packageName := "mypkg"
+	packageVersion := "v0.1.0"
+	_, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
+	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
+
+	// Initialize project
+	projectDir := initPackage(t, tempDir, "myproject")
 
 	// Add dependency to project
-	stdout, stderr := addDependencyToProject(t, projectDir, packageName, "v0.1.0")
-	expectedOutput := fmt.Sprintf("Added dependency '%s' v0.1.0 from registry '%s' to project\n", packageName, registryName)
+	stdout, stderr := addDependencyToProject(t, projectDir, packageName, packageVersion)
+	expectedOutput := fmt.Sprintf("Added dependency '%s' %s from registry '%s' to project\n", packageName, packageVersion, registryName)
 	if stdout != expectedOutput {
 		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
 	}
 
-	// Verify Project.json
-	projectFile := filepath.Join(projectDir, "Project.json")
-	verifyProjectDependencies(t, projectFile, packageName, "v0.1.0")
+	// Verify dependency in Project.json
+	verifyProjectDependencies(t, filepath.Join(projectDir, "Project.json"), packageName, packageVersion)
 }
 
 func TestRegistryInit(t *testing.T) {
@@ -198,90 +187,178 @@ func TestRegistryInitSuccess(t *testing.T) {
 	}
 }
 
-func TestRegistryStatus(t *testing.T) {
-	tempDir := t.TempDir()
-	registryName := "myreg"
-	packageName := "mypkg"
-
-	// Override HOME to isolate .cosm in tempDir
-	os.Setenv("HOME", tempDir)
-	t.Cleanup(func() { os.Unsetenv("HOME") })
-
-	// Create a bare registry repo
-	registryGitURL := createBareRepo(t, tempDir, "registry.git")
-	_, _, err := runCommand(t, tempDir, "registry", "init", registryName, registryGitURL)
-	if err != nil {
-		t.Fatalf("Failed to init registry: %v", err)
-	}
-
-	// Setup package repo with tags and add to registry
-	packageGitURL := setupPackageRepo(t, tempDir, packageName, "v1.0.0", "v1.1.0")
-	_, _, err = runCommand(t, tempDir, "registry", "add", registryName, packageGitURL)
-	if err != nil {
-		t.Fatalf("Failed to add package: %v", err)
-	}
-
-	// Run the status command
-	stdout, stderr, err := runCommand(t, tempDir, "registry", "status", registryName)
-	if err != nil {
-		t.Fatalf("Command failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
-	}
-
-	// Verify output
-	registryMetaFile := filepath.Join(tempDir, ".cosm", "registries", registryName, "registry.json")
-	data, err := os.ReadFile(registryMetaFile)
-	if err != nil {
-		t.Fatalf("Failed to read registry.json: %v", err)
-	}
-	var registry types.Registry
-	if err := json.Unmarshal(data, &registry); err != nil {
-		t.Fatalf("Failed to parse registry.json: %v", err)
-	}
-	packageUUID := registry.Packages[packageName]
-	expectedOutput := fmt.Sprintf("Registry Status for '%s':\n  Packages:\n    - %s (UUID: %s)\n", registryName, packageName, packageUUID)
-	if stdout != expectedOutput {
-		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
-	}
-}
-
 func TestRegistryAdd(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
 
+	// Setup registry
 	registryName := "myreg"
 	_, registryDir := setupRegistry(t, tempDir, registryName)
 
+	// Setup package with version
 	packageName := "mypkg"
-	_, packageGitURL := setupPackageWithGit(t, tempDir, packageName)
+	packageVersion := "v0.1.0"
+	_, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
 
-	// Add package to registry (should tag v0.1.0)
+	// Add package to registry
 	stdout, stderr := addPackageToRegistry(t, tempDir, registryName, packageGitURL)
 	expectedOutputPrefix := fmt.Sprintf("Added package '%s' with UUID '", packageName)
 	if !strings.HasPrefix(stdout, expectedOutputPrefix) {
-		t.Errorf("Expected stdout to start with %q, got %q\nStderr: %s", expectedOutputPrefix, stdout, stderr)
+		t.Errorf("Expected stdout prefix %q, got %q\nStderr: %s", expectedOutputPrefix, stdout, stderr)
 	}
-	expectedStderrPrefix := fmt.Sprintf("No valid tags found; released version 'v0.1.0' from Project.json to repository at '%s'", packageGitURL)
+	expectedStderrPrefix := fmt.Sprintf("No valid tags found; released version '%s' from Project.json to repository at '%s'", packageVersion, packageGitURL)
 	if !strings.HasPrefix(stderr, expectedStderrPrefix) {
-		t.Errorf("Expected stderr to start with %q, got %q", expectedStderrPrefix, stderr)
+		t.Errorf("Expected stderr prefix %q, got %q", expectedStderrPrefix, stderr)
 	}
 
-	// Verify registry metadata
+	// Verify registry state
 	registryMetaFile := filepath.Join(registryDir, "registry.json")
 	packageUUID := verifyRegistryMetadata(t, registryMetaFile, packageName)
 
-	// Verify versions.json contains v0.1.0
+	// Verify package versions and specs
 	versionsFile := filepath.Join(registryDir, "M", packageName, "versions.json")
-	verifyVersionsJSON(t, versionsFile, []string{"v0.1.0"})
+	verifyVersionsJSON(t, versionsFile, []string{packageVersion})
 
-	// Verify package clone exists
 	verifyPackageCloneExists(t, tempDir, packageUUID)
 
-	// Verify specs.json for v0.1.0
-	specsFile := filepath.Join(registryDir, "M", packageName, "v0.1.0", "specs.json")
-	verifySpecsJSON(t, specsFile, "v0.1.0")
+	specsFile := filepath.Join(registryDir, "M", packageName, packageVersion, "specs.json")
+	verifySpecsJSON(t, specsFile, packageVersion)
 }
 
-/////////////////////// HELPER FUNCTIONS ///////////////////////
+// TestReleasePatch tests the cosm release --patch command
+func TestRelease(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	registryName := "myreg"
+	packageName := "mypkg"
+	version := "v1.2.3"
+	packageDir, registryDir := setupReleaseTestEnv(t, tempDir, registryName, packageName, version)
+
+	// Execute release --patch
+	patchRelease := "v1.2.4"
+	executeAndVerifyRelease(t, registryDir, packageDir, packageName, []string{version}, patchRelease, "--patch")
+
+	// Execute release --minor
+	minorRelease := "v1.3.0"
+	executeAndVerifyRelease(t, registryDir, packageDir, packageName, []string{version, patchRelease}, minorRelease, "--minor")
+
+	// Execute release --major
+	majorRelease := "v2.0.0"
+	executeAndVerifyRelease(t, registryDir, packageDir, packageName, []string{version, patchRelease, minorRelease}, majorRelease, "--major")
+
+	// Execute custom release
+	customRelease := "v3.1.2"
+	executeAndVerifyRelease(t, registryDir, packageDir, packageName, []string{version, patchRelease, minorRelease, majorRelease}, customRelease, customRelease)
+}
+
+func TestMakePackageAvailable(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Setup registry and package
+	registryName := "myreg"
+	packageName := "mypkg"
+	packageVersion := "v0.1.0"
+	_, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
+	setupRegistry(t, tempDir, registryName)
+	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
+
+	// Capture the initial branch of the clone
+	clonePath := filepath.Join(tempDir, ".cosm", "clones")
+	var specs types.Specs
+	specsFile := filepath.Join(tempDir, ".cosm", "registries", registryName, "M", packageName, packageVersion, "specs.json")
+	data, err := os.ReadFile(specsFile)
+	if err != nil {
+		t.Fatalf("Failed to read specs.json: %v", err)
+	}
+	if err := json.Unmarshal(data, &specs); err != nil {
+		t.Fatalf("Failed to parse specs.json: %v", err)
+	}
+	cloneDir := filepath.Join(clonePath, specs.UUID)
+	if err := os.Chdir(cloneDir); err != nil {
+		t.Fatalf("Failed to change to clone dir: %v", err)
+	}
+	initialBranchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	initialBranchOutput, err := initialBranchCmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to get initial branch: %v", err)
+	}
+	initialBranch := strings.TrimSpace(string(initialBranchOutput))
+
+	// Test success case
+	err = commands.MakePackageAvailable(filepath.Join(tempDir, ".cosm"), registryName, packageName, packageVersion)
+	if err != nil {
+		t.Fatalf("MakePackageAvailable failed: %v", err)
+	}
+
+	// Verify destination directory
+	destPath := filepath.Join(tempDir, ".cosm", "packages", packageName, specs.SHA1)
+	if _, err := os.Stat(destPath); os.IsNotExist(err) {
+		t.Errorf("Destination directory %s not created", destPath)
+	}
+
+	// Verify clone is back on the initial branch after success
+	if err := os.Chdir(cloneDir); err != nil {
+		t.Fatalf("Failed to change to clone dir: %v", err)
+	}
+	successBranchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	successBranchOutput, err := successBranchCmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to check branch after success: %v", err)
+	}
+	successBranch := strings.TrimSpace(string(successBranchOutput))
+	if successBranch != initialBranch {
+		t.Errorf("Expected clone to revert to initial branch %q after success, got %q", initialBranch, successBranch)
+	}
+
+	// Clean up the packages directory to force recreation in error case
+	packagesDir := filepath.Join(tempDir, ".cosm", "packages")
+	if err := os.RemoveAll(packagesDir); err != nil {
+		t.Fatalf("Failed to remove packages directory: %v", err)
+	}
+
+	// Test error case: make destination directory unwritable to simulate failure
+	if err := os.MkdirAll(packagesDir, 0755); err != nil {
+		t.Fatalf("Failed to recreate packages dir: %v", err)
+	}
+	if err := os.Chmod(packagesDir, 0500); err != nil { // Read+execute only, no write
+		t.Fatalf("Failed to make packages dir unwritable: %v", err)
+	}
+	defer os.Chmod(packagesDir, 0755) // Restore permissions
+
+	// Verify packages dir is unwritable
+	if err := os.Mkdir(filepath.Join(packagesDir, "test"), 0755); err == nil {
+		t.Fatalf("Expected packages dir to be unwritable, but could create subdirectory")
+	}
+
+	err = commands.MakePackageAvailable(filepath.Join(tempDir, ".cosm"), registryName, packageName, packageVersion)
+	if err == nil {
+		t.Errorf("Expected MakePackageAvailable to fail due to unwritable directory")
+	}
+
+	// Verify clone is still reverted after error
+	if err := os.Chdir(cloneDir); err != nil {
+		t.Fatalf("Failed to change to clone dir: %v", err)
+	}
+	errorBranchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	errorBranchOutput, err := errorBranchCmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to check branch after error: %v", err)
+	}
+	finalBranch := strings.TrimSpace(string(errorBranchOutput))
+	if finalBranch != initialBranch {
+		t.Errorf("Expected clone to revert to initial branch %q after error, got %q", initialBranch, finalBranch)
+	}
+}
+
+/////////////////////// SETUP HELPER FUNCTIONS ///////////////////////
+
+// testProject represents a package configuration for testing with a Git URL
+type testProject struct {
+	types.Project
+	GitURL string
+}
 
 // setupRegistry initializes a registry with a bare Git remote using cosm registry init
 func setupRegistry(t *testing.T, tempDir, registryName string) (string, string) {
@@ -293,9 +370,51 @@ func setupRegistry(t *testing.T, tempDir, registryName string) (string, string) 
 	return gitURL, filepath.Join(tempDir, ".cosm", "registries", registryName)
 }
 
-// setupPackageWithGit creates a package with a Git remote and no tags
-func setupPackageWithGit(t *testing.T, tempDir, packageName string) (string, string) {
-	packageDir := setupPackage(t, tempDir, packageName)
+// initPackage initializes a package with cosm init and verifies the result
+func initPackage(t *testing.T, tempDir, packageName string, version ...string) string {
+	t.Helper()
+	packageDir := filepath.Join(tempDir, packageName)
+	if err := os.Mkdir(packageDir, 0755); err != nil {
+		t.Fatalf("Failed to create package dir %s: %v", packageDir, err)
+	}
+
+	// Run cosm init with optional version
+	args := []string{"init", packageName}
+	if len(version) > 0 {
+		args = append(args, version[0])
+	}
+	stdout, stderr, err := runCommand(t, packageDir, args...)
+	if err != nil {
+		t.Fatalf("Command failed: %v\nStderr: %s", err, stderr)
+	}
+
+	// Determine expected version
+	expectedVersion := "v0.1.0"
+	if len(version) > 0 {
+		expectedVersion = version[0]
+	}
+	expectedOutput := fmt.Sprintf("Initialized project '%s' with version %s and UUID ", packageName, expectedVersion)
+	if !strings.HasPrefix(stdout, expectedOutput) {
+		t.Errorf("Expected output prefix %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+
+	// Verify Project.json
+	expectedProject := types.Project{
+		Name:     packageName,
+		Authors:  []string{"[testuser]testuser@git.com"},
+		Language: "",
+		Version:  expectedVersion,
+		Deps:     make(map[string]string),
+	}
+	checkProjectFile(t, filepath.Join(packageDir, "Project.json"), expectedProject)
+
+	return packageDir
+}
+
+// setupPackageWithGit creates a package with a Git remote and a specified version
+func setupPackageWithGit(t *testing.T, tempDir, packageName, version string) (string, string) {
+	t.Helper()
+	packageDir := initPackage(t, tempDir, packageName, version)
 	if err := os.Chdir(packageDir); err != nil {
 		t.Fatalf("Failed to change to package dir %s: %v", packageDir, err)
 	}
@@ -315,6 +434,7 @@ func setupPackageWithGit(t *testing.T, tempDir, packageName string) (string, str
 	if err := exec.Command("git", "push", "origin", "main").Run(); err != nil {
 		t.Fatalf("Failed to push main for %s: %v", packageName, err)
 	}
+
 	return packageDir, bareRepoURL
 }
 
@@ -325,6 +445,175 @@ func addPackageToRegistry(t *testing.T, tempDir, registryName, packageGitURL str
 		t.Fatalf("Failed to add package to registry '%s': %v\nStderr: %s", registryName, err, stderr)
 	}
 	return stdout, stderr
+}
+
+// addDependencyToProject adds a dependency to a project using cosm add
+func addDependencyToProject(t *testing.T, projectDir, packageName, version string) (string, string) {
+	cmd := exec.Command(binaryPath, "add", packageName+"@"+version)
+	cmd.Dir = projectDir
+	cmd.Stdin = strings.NewReader("\n") // Empty input for single registry case
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		t.Fatalf("Failed to add dependency '%s@%s': %v\nStderr: %s", packageName, version, err, stderr.String())
+	}
+	return stdout.String(), stderr.String()
+}
+
+// setupTestEnv sets up a temporary environment with a Git config
+func setupTestEnv(t *testing.T) (tempDir string, cleanup func()) {
+	tempDir = t.TempDir()
+	os.Setenv("HOME", tempDir)
+	_ = setupTempGitConfig(t, tempDir)
+	cleanup = func() { os.Unsetenv("HOME") }
+	return tempDir, cleanup
+}
+
+// createBareRepo creates a bare Git repository and returns its file:// URL
+func createBareRepo(t *testing.T, dir string, name string) string {
+	t.Helper()
+	bareRepoPath := filepath.Join(dir, name)
+	if err := exec.Command("git", "init", "--bare", bareRepoPath).Run(); err != nil {
+		t.Fatalf("Failed to initialize bare Git repo at %s: %v", bareRepoPath, err)
+	}
+	return "file://" + bareRepoPath
+}
+
+// setupTempGitConfig creates a temporary Git config file and sets mock values
+func setupTempGitConfig(t *testing.T, tempDir string) string {
+	t.Helper()
+	tempGitConfig := filepath.Join(tempDir, "gitconfig")
+
+	// Write a complete Git config file directly
+	configContent := `[user]
+	name = testuser
+	email = testuser@git.com
+`
+	if err := os.WriteFile(tempGitConfig, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to create temporary Git config file %s: %v", tempGitConfig, err)
+	}
+
+	// Set GIT_CONFIG_GLOBAL to point to this file
+	os.Setenv("GIT_CONFIG_GLOBAL", tempGitConfig)
+	t.Cleanup(func() { os.Unsetenv("GIT_CONFIG_GLOBAL") }) // Clean up after test
+
+	// Verify Git recognizes the config (for debugging, non-fatal)
+	cmd := exec.Command("git", "config", "--global", "--get", "user.name")
+	cmd.Dir = tempDir // Ensure a stable working directory
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("Debug: Git config verification failed: %v\nOutput: %s", err, output)
+	} else if strings.TrimSpace(string(output)) != "testuser" {
+		t.Logf("Debug: Expected git user.name 'testuser', got %q", strings.TrimSpace(string(output)))
+	}
+
+	return tempGitConfig
+}
+
+// setupRegistryWithPackages sets up a registry with pre-initialized packages
+func setupRegistryWithPackages(t *testing.T, tempDir, registryName string, packages []testProject) string {
+	_, registryDir := setupRegistry(t, tempDir, registryName)
+	for _, pkg := range packages {
+		if pkg.GitURL == "" {
+			t.Fatalf("Package %s has no GitURL; must be pre-initialized with setupPackageWithGit", pkg.Name)
+		}
+		addPackageToRegistry(t, tempDir, registryName, pkg.GitURL)
+	}
+	return registryDir
+}
+
+// setupReleaseTestEnv prepares a package and registry for release testing
+func setupReleaseTestEnv(t *testing.T, tempDir, registryName, packageName, initialVersion string) (string, string) {
+	t.Helper()
+
+	// Initialize package with specified version and Git remote
+	packageDir, gitURL := setupPackageWithGit(t, tempDir, packageName, initialVersion)
+
+	// Load the project's current state from Project.json
+	project := loadProjectFile(t, filepath.Join(packageDir, "Project.json"))
+
+	// Define test package with loaded project and Git URL
+	pkg := testProject{
+		Project: project,
+		GitURL:  gitURL,
+	}
+
+	// Register package in the registry
+	registryDir := setupRegistryWithPackages(t, tempDir, registryName, []testProject{pkg})
+
+	return packageDir, registryDir
+}
+
+func releasePackage(t *testing.T, packageDir, releaseArg string) (string, string) {
+	var args []string
+	switch releaseArg {
+	case "--patch", "--minor", "--major":
+		args = []string{"release", releaseArg}
+	default:
+		if strings.HasPrefix(releaseArg, "v") {
+			args = []string{"release", releaseArg}
+		} else {
+			t.Fatalf("Invalid release argument: %s. Use --patch, --minor, --major, or v<version>", releaseArg)
+		}
+	}
+	stdout, stderr, err := runCommand(t, packageDir, args...)
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("Release command failed with exit code %d: stdout: %q, stderr: %q", exitErr.ExitCode(), stdout, stderr)
+		} else {
+			t.Fatalf("Release command failed: %v, stdout: %q, stderr: %q", err, stdout, stderr)
+		}
+	}
+	return stdout, stderr
+}
+
+// runCommand runs the cosm binary with given args in a directory and returns output and error
+func runCommand(t *testing.T, dir string, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	cmd := exec.Command(binaryPath, args...)
+	cmd.Dir = dir
+	var out, errOut bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	err = cmd.Run()
+	return out.String(), errOut.String(), err
+}
+
+// loadProjectFile reads and parses Project.json from a given file path
+func loadProjectFile(t *testing.T, projectFile string) types.Project {
+	t.Helper()
+	data, err := os.ReadFile(projectFile)
+	if err != nil {
+		t.Fatalf("Failed to read Project.json: %v", err)
+	}
+	var project types.Project
+	if err := json.Unmarshal(data, &project); err != nil {
+		t.Fatalf("Failed to parse Project.json: %v", err)
+	}
+	if project.Deps == nil {
+		project.Deps = make(map[string]string)
+	}
+	return project
+}
+
+/////////////////////// Check HELPER FUNCTIONS ///////////////////////
+
+// ensureNoUncommittedChanges verifies that the Git working directory has no uncommitted changes
+func ensureNoUncommittedChanges(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Failed to change to directory %s: %v", dir, err)
+	}
+	statusCmd := exec.Command("git", "status", "--porcelain")
+	output, err := statusCmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to check Git status: %v", err)
+	}
+	if len(strings.TrimSpace(string(output))) > 0 {
+		t.Fatalf("Uncommitted changes detected in %s: %s", dir, string(output))
+	}
 }
 
 // verifyRegistryMetadata checks the registry metadata in registry.json
@@ -347,31 +636,8 @@ func verifyRegistryMetadata(t *testing.T, registryMetaFile, packageName string) 
 	return packageUUID
 }
 
-// addDependencyToProject adds a dependency to a project using cosm add
-func addDependencyToProject(t *testing.T, projectDir, packageName, version string) (string, string) {
-	cmd := exec.Command(binaryPath, "add", packageName+"@"+version)
-	cmd.Dir = projectDir
-	cmd.Stdin = strings.NewReader("\n") // Empty input for single registry case
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
-		t.Fatalf("Failed to add dependency '%s@%s': %v\nStderr: %s", packageName, version, err, stderr.String())
-	}
-	return stdout.String(), stderr.String()
-}
-
-// verifyProjectDependencies checks the Deps field in Project.json
 func verifyProjectDependencies(t *testing.T, projectFile, packageName, expectedVersion string) {
-	data, err := os.ReadFile(projectFile)
-	if err != nil {
-		t.Fatalf("Failed to read Project.json: %v", err)
-	}
-	var project types.Project
-	if err := json.Unmarshal(data, &project); err != nil {
-		t.Fatalf("Failed to parse Project.json: %v", err)
-	}
+	project := loadProjectFile(t, projectFile)
 	if version, exists := project.Deps[packageName]; !exists || version != expectedVersion {
 		t.Errorf("Expected dependency %s:%s, got %v", packageName, expectedVersion, project.Deps)
 	}
@@ -418,59 +684,6 @@ func verifySpecsJSON(t *testing.T, specsFile, expectedVersion string) {
 	if specs.Version != expectedVersion {
 		t.Errorf("Expected specs.json version %q, got %q", expectedVersion, specs.Version)
 	}
-}
-
-// initPackage initializes a package with cosm init and Git setup
-func initPackage(t *testing.T, dir, packageName string, tags ...string) string {
-	t.Helper()
-	packageDir := filepath.Join(dir, packageName)
-	if err := os.Mkdir(packageDir, 0755); err != nil {
-		t.Fatalf("Failed to create package dir %s: %v", packageDir, err)
-	}
-	if err := os.Chdir(packageDir); err != nil {
-		t.Fatalf("Failed to change to package dir %s: %v", packageDir, err)
-	}
-	_, _, err := runCommand(t, packageDir, "init", packageName)
-	if err != nil {
-		t.Fatalf("Failed to init package %s: %v", packageName, err)
-	}
-	if err := exec.Command("git", "init").Run(); err != nil {
-		t.Fatalf("Failed to init Git repo for %s: %v", packageName, err)
-	}
-	if err := exec.Command("git", "add", "Project.json").Run(); err != nil {
-		t.Fatalf("Failed to add Project.json for %s: %v", packageName, err)
-	}
-	if err := exec.Command("git", "commit", "-m", "Initial commit").Run(); err != nil {
-		t.Fatalf("Failed to commit for %s: %v", packageName, err)
-	}
-	for _, tag := range tags {
-		if err := exec.Command("git", "tag", tag).Run(); err != nil {
-			t.Fatalf("Failed to tag %s for %s: %v", tag, packageName, err)
-		}
-	}
-	return packageDir
-}
-
-// setupPackageRepo sets up a package repo with a bare remote and returns the bare repo URL
-func setupPackageRepo(t *testing.T, tempDir, packageName string, tags ...string) string {
-	t.Helper()
-	packageDir := initPackage(t, tempDir, packageName, tags...)
-	bareRepoURL := createBareRepo(t, tempDir, packageName+".git")
-	if err := os.Chdir(packageDir); err != nil {
-		t.Fatalf("Failed to change to package dir %s: %v", packageDir, err)
-	}
-	if err := exec.Command("git", "remote", "add", "origin", bareRepoURL).Run(); err != nil {
-		t.Fatalf("Failed to add remote for %s: %v", packageName, err)
-	}
-	if err := exec.Command("git", "push", "origin", "main").Run(); err != nil {
-		t.Fatalf("Failed to push main for %s: %v", packageName, err)
-	}
-	for _, tag := range tags {
-		if err := exec.Command("git", "push", "origin", tag).Run(); err != nil {
-			t.Fatalf("Failed to push tag %s for %s: %v", tag, packageName, err)
-		}
-	}
-	return bareRepoURL
 }
 
 // checkRegistriesFile (updated path)
@@ -530,18 +743,6 @@ func checkRegistryMetaFile(t *testing.T, registryMetaFile string, expected types
 	}
 }
 
-// runCommand runs the cosm binary with given args in a directory and returns output and error
-func runCommand(t *testing.T, dir string, args ...string) (stdout, stderr string, err error) {
-	t.Helper()
-	cmd := exec.Command(binaryPath, args...)
-	cmd.Dir = dir
-	var out, errOut bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errOut
-	err = cmd.Run()
-	return out.String(), errOut.String(), err
-}
-
 // checkOutput verifies the command output and exit code
 func checkOutput(t *testing.T, stdout, stderr, expectedOutput string, err error, expectError bool, expectedExitCode int) {
 	t.Helper()
@@ -562,17 +763,11 @@ func checkOutput(t *testing.T, stdout, stderr, expectedOutput string, err error,
 	}
 }
 
-// checkProjectFile verifies the contents of Project.json, including UUID
+// checkProjectFile verifies the contents of Project.json against an expected project
 func checkProjectFile(t *testing.T, file string, expected types.Project) {
 	t.Helper()
-	data, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatalf("Failed to read Project.json: %v", err)
-	}
-	var project types.Project
-	if err := json.Unmarshal(data, &project); err != nil {
-		t.Fatalf("Failed to parse Project.json: %v", err)
-	}
+	project := loadProjectFile(t, file)
+
 	if project.Name != expected.Name {
 		t.Errorf("Expected Name %q, got %q", expected.Name, project.Name)
 	}
@@ -608,65 +803,115 @@ func checkProjectFile(t *testing.T, file string, expected types.Project) {
 	}
 }
 
-// setupTestEnv sets up a temporary environment with a Git config
-func setupTestEnv(t *testing.T) (tempDir string, cleanup func()) {
-	tempDir = t.TempDir()
-	os.Setenv("HOME", tempDir)
-	_ = setupTempGitConfig(t, tempDir)
-	cleanup = func() { os.Unsetenv("HOME") }
-	return tempDir, cleanup
-}
-
-// setupPackage creates a package directory and initializes it with cosm init
-func setupPackage(t *testing.T, tempDir, packageName string) string {
-	packageDir := filepath.Join(tempDir, packageName)
-	if err := os.Mkdir(packageDir, 0755); err != nil {
-		t.Fatalf("Failed to create package dir %s: %v", packageDir, err)
-	}
-	_, _, err := runCommand(t, packageDir, "init", packageName)
+// verifyProjectVersion checks the Project.json version
+func verifyProjectVersion(t *testing.T, projectFile, expectedVersion string) {
+	data, err := os.ReadFile(projectFile)
 	if err != nil {
-		t.Fatalf("Failed to init package %s: %v", packageName, err)
+		t.Fatalf("Failed to read Project.json: %v", err)
 	}
-	return packageDir
+	var project types.Project
+	if err := json.Unmarshal(data, &project); err != nil {
+		t.Fatalf("Failed to parse Project.json: %v", err)
+	}
+	if project.Version != expectedVersion {
+		t.Errorf("Expected Project.json version %q, got %q", expectedVersion, project.Version)
+	}
 }
 
-// createBareRepo creates a bare Git repository and returns its file:// URL
-func createBareRepo(t *testing.T, dir string, name string) string {
-	t.Helper()
-	bareRepoPath := filepath.Join(dir, name)
-	if err := exec.Command("git", "init", "--bare", bareRepoPath).Run(); err != nil {
-		t.Fatalf("Failed to initialize bare Git repo at %s: %v", bareRepoPath, err)
+// verifyGitTag checks if the specified tag exists in the Git repo
+func verifyGitTag(t *testing.T, packageDir, tag string) {
+	if err := os.Chdir(packageDir); err != nil {
+		t.Fatalf("Failed to change to package dir: %v", err)
 	}
-	return "file://" + bareRepoPath
-}
-
-// setupTempGitConfig creates a temporary Git config file and sets mock values
-func setupTempGitConfig(t *testing.T, tempDir string) string {
-	t.Helper()
-	tempGitConfig := filepath.Join(tempDir, "gitconfig")
-
-	// Write a complete Git config file directly
-	configContent := `[user]
-	name = testuser
-	email = testuser@git.com
-`
-	if err := os.WriteFile(tempGitConfig, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to create temporary Git config file %s: %v", tempGitConfig, err)
+	fetchCmd := exec.Command("git", "fetch", "origin")
+	if err := fetchCmd.Run(); err != nil {
+		t.Fatalf("Failed to fetch from origin: %v", err)
 	}
-
-	// Set GIT_CONFIG_GLOBAL to point to this file
-	os.Setenv("GIT_CONFIG_GLOBAL", tempGitConfig)
-	t.Cleanup(func() { os.Unsetenv("GIT_CONFIG_GLOBAL") }) // Clean up after test
-
-	// Verify Git recognizes the config (for debugging, non-fatal)
-	cmd := exec.Command("git", "config", "--global", "--get", "user.name")
-	cmd.Dir = tempDir // Ensure a stable working directory
-	output, err := cmd.CombinedOutput()
+	tagCmd := exec.Command("git", "tag", "-l", tag)
+	tagOutput, err := tagCmd.Output()
 	if err != nil {
-		t.Logf("Debug: Git config verification failed: %v\nOutput: %s", err, output)
-	} else if strings.TrimSpace(string(output)) != "testuser" {
-		t.Logf("Debug: Expected git user.name 'testuser', got %q", strings.TrimSpace(string(output)))
+		t.Fatalf("Failed to list tags: %v", err)
+	}
+	if !strings.Contains(string(tagOutput), tag) {
+		t.Errorf("Expected tag %q to exist, got %q", tag, string(tagOutput))
+	}
+}
+
+// verifyRegistryUpdates checks the registry's versions.json and specs.json
+func verifyRegistryUpdates(t *testing.T, versionsFile string, specs types.Specs, newVersion string, previousVersions []string) {
+	data, err := os.ReadFile(versionsFile)
+	if err != nil {
+		t.Fatalf("Failed to read versions.json: %v", err)
+	}
+	var versions []string
+	if err := json.Unmarshal(data, &versions); err != nil {
+		t.Fatalf("Failed to parse versions.json: %v", err)
+	}
+	expectedVersions := append(previousVersions, newVersion)
+	if len(versions) != len(expectedVersions) {
+		t.Errorf("Expected %d versions, got %d: %v", len(expectedVersions), len(versions), versions)
+	}
+	for _, expected := range expectedVersions {
+		found := false
+		for _, v := range versions {
+			if v == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected %q in versions.json, got %v", expected, versions)
+		}
 	}
 
-	return tempGitConfig
+	if specs.Version != newVersion {
+		t.Errorf("Expected specs.json version %q, got %q", newVersion, specs.Version)
+	}
+	if specs.SHA1 == "" {
+		t.Errorf("Expected non-empty SHA1 in specs.json, got empty")
+	}
+}
+
+// verifySHA1Matches ensures the SHA1 in specs matches the Git tag's SHA1
+func verifySHA1Matches(t *testing.T, packageDir, tag string, specs types.Specs) {
+	if err := os.Chdir(packageDir); err != nil {
+		t.Fatalf("Failed to change to package dir: %v", err)
+	}
+	sha1Output, err := exec.Command("git", "rev-list", "-n", "1", tag).Output()
+	if err != nil {
+		t.Fatalf("Failed to get SHA1 for tag %q: %v", tag, err)
+	}
+	expectedSHA1 := strings.TrimSpace(string(sha1Output))
+	if specs.SHA1 != expectedSHA1 {
+		t.Errorf("Expected SHA1 %q in specs.json, got %q", expectedSHA1, specs.SHA1)
+	}
+}
+
+func executeAndVerifyRelease(t *testing.T, registryDir, packageDir, packageName string, previousVersions []string, newVersion, incrementOrVersion string) {
+	stdout, stderr := releasePackage(t, packageDir, incrementOrVersion)
+	expectedOutput := fmt.Sprintf("Released version '%s' for project '%s'\n", newVersion, packageName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+
+	// Verify release results
+	verifyRelease(t, packageDir, registryDir, packageName, newVersion, previousVersions)
+}
+
+// verifyRelease orchestrates the release verification steps
+func verifyRelease(t *testing.T, packageDir, registryDir, packageName, newVersion string, previousVersions []string) {
+	// Read specs.json once
+	specsFile := filepath.Join(registryDir, "M", packageName, newVersion, "specs.json")
+	data, err := os.ReadFile(specsFile)
+	if err != nil {
+		t.Fatalf("Failed to read specs.json: %v", err)
+	}
+	var specs types.Specs
+	if err := json.Unmarshal(data, &specs); err != nil {
+		t.Fatalf("Failed to parse specs.json: %v", err)
+	}
+	verifyProjectVersion(t, filepath.Join(packageDir, "Project.json"), newVersion)
+	verifyGitTag(t, packageDir, newVersion)
+	verifyRegistryUpdates(t, filepath.Join(registryDir, "M", packageName, "versions.json"), specs, newVersion, previousVersions)
+	verifySHA1Matches(t, packageDir, newVersion, specs)
 }

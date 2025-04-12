@@ -47,13 +47,13 @@ func RegistryAdd(cmd *cobra.Command, args []string) {
 	registry, registryMetaFile := loadRegistryMetadata(registriesDir, registryName)
 	tmpClonePath := clonePackageToTempDir(cosmDir, packageGitURL)
 	enterCloneDir(tmpClonePath)
-	project, packageName, packageUUID := validateProjectFile(packageGitURL, tmpClonePath)
-	ensurePackageNotRegistered(registry, packageName, registryName, tmpClonePath)
-	validTags := validateAndCollectVersionTags(packageGitURL, tmpClonePath)
-	packageDir := setupPackageDir(registriesDir, registryName, packageName, tmpClonePath)
-	updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL, validTags, project, tmpClonePath)
-	finalizePackageAddition(cosmDir, tmpClonePath, packageUUID, registriesDir, registryName, packageName, &registry, registryMetaFile, validTags[0])
-	fmt.Printf("Added package '%s' with UUID '%s' to registry '%s'\n", packageName, packageUUID, registryName)
+	project := validateProjectFile(packageGitURL, tmpClonePath)
+	ensurePackageNotRegistered(registry, project.Name, registryName, tmpClonePath)
+	validTags := validateAndCollectVersionTags(packageGitURL, project.Version, tmpClonePath)
+	packageDir := setupPackageDir(registriesDir, registryName, project.Name, tmpClonePath)
+	updatePackageVersions(packageDir, project.Name, project.UUID, packageGitURL, validTags, project, tmpClonePath)
+	finalizePackageAddition(cosmDir, tmpClonePath, project.UUID, registriesDir, registryName, project.Name, &registry, registryMetaFile, validTags[0])
+	fmt.Printf("Added package '%s' with UUID '%s' to registry '%s'\n", project.Name, project.UUID, registryName)
 }
 
 // cleanupTempClone removes the temporary clone directory
@@ -225,8 +225,8 @@ func commitAndPushRegistryChanges(registriesDir, registryName, packageName, vers
 	}
 }
 
-// validateProjectFile reads and validates Project.json, returning the project, package name, and UUID
-func validateProjectFile(packageGitURL, tmpClonePath string) (types.Project, string, string) {
+// validateProjectFile reads and validates Project.json, returning the project
+func validateProjectFile(packageGitURL, tmpClonePath string) types.Project {
 	data, err := os.ReadFile("Project.json")
 	if err != nil {
 		fmt.Printf("Error: Repository at '%s' does not contain a Project.json file\n", packageGitURL)
@@ -254,52 +254,41 @@ func validateProjectFile(packageGitURL, tmpClonePath string) (types.Project, str
 		cleanupTempClone(tmpClonePath)
 		os.Exit(1)
 	}
-	return project, project.Name, project.UUID
+	if project.Version == "" {
+		fmt.Printf("Error: Project.json at '%s' does not contain a version\n", packageGitURL)
+		cleanupTempClone(tmpClonePath)
+		os.Exit(1)
+	}
+	// Validate version parsing
+	_ = parseSemVer(project.Version) // Will exit if invalid
+	return project
 }
 
-// validateAndCollectVersionTags fetches and validates Git tags, or releases the current version if none exist
-func validateAndCollectVersionTags(packageGitURL, tmpClonePath string) []string {
+// validateAndCollectVersionTags fetches Git tags, or releases the current version if none exist
+func validateAndCollectVersionTags(packageGitURL string, packageVersion string, tmpClonePath string) []string {
 	tagOutput, err := exec.Command("git", "tag").CombinedOutput()
 	if err != nil || len(strings.TrimSpace(string(tagOutput))) == 0 {
-		// No tags found, use Project.json version and tag it
-		data, err := os.ReadFile("Project.json")
-		if err != nil {
-			fmt.Printf("Error: Repository at '%s' does not contain a Project.json file\n", packageGitURL)
-			cleanupTempClone(tmpClonePath)
-			os.Exit(1)
-		}
-		var project types.Project
-		if err := json.Unmarshal(data, &project); err != nil {
-			fmt.Printf("Error: Invalid Project.json in repository at '%s': %v\n", packageGitURL, err)
-			cleanupTempClone(tmpClonePath)
-			os.Exit(1)
-		}
-		version := project.Version
-		if version == "" {
+		// No tags found, use Project.json packageVersion and tag it
+		if packageVersion == "" {
 			fmt.Printf("Error: Project.json at '%s' has no version specified\n", packageGitURL)
-			cleanupTempClone(tmpClonePath)
-			os.Exit(1)
-		}
-		if !strings.HasPrefix(version, "v") || len(strings.Split(version, ".")) < 2 {
-			fmt.Printf("Error: Version '%s' in Project.json at '%s' is not a valid semantic version (e.g., vX.Y.Z)\n", version, packageGitURL)
 			cleanupTempClone(tmpClonePath)
 			os.Exit(1)
 		}
 
 		// Tag the current version
-		if err := exec.Command("git", "tag", version).Run(); err != nil {
-			fmt.Printf("Error tagging version '%s' in repository at '%s': %v\n", version, packageGitURL, err)
+		if err := exec.Command("git", "tag", packageVersion).Run(); err != nil {
+			fmt.Printf("Error tagging version '%s' in repository at '%s': %v\n", packageVersion, packageGitURL, err)
 			cleanupTempClone(tmpClonePath)
 			os.Exit(1)
 		}
 		// Push the tag to the remote
-		if err := exec.Command("git", "push", "origin", version).Run(); err != nil {
-			fmt.Printf("Error pushing tag '%s' to origin for repository at '%s': %v\n", version, packageGitURL, err)
+		if err := exec.Command("git", "push", "origin", packageVersion).Run(); err != nil {
+			fmt.Printf("Error pushing tag '%s' to origin for repository at '%s': %v\n", packageVersion, packageGitURL, err)
 			cleanupTempClone(tmpClonePath)
 			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "No valid tags found; released version '%s' from Project.json to repository at '%s'\n", version, packageGitURL)
-		return []string{version}
+		fmt.Fprintf(os.Stderr, "No valid tags found; released version '%s' from Project.json to repository at '%s'\n", packageVersion, packageGitURL)
+		return []string{packageVersion}
 	}
 
 	tags := strings.Split(strings.TrimSpace(string(tagOutput)), "\n")

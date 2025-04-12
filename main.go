@@ -79,13 +79,13 @@ func main() {
 	}
 
 	var initCmd = &cobra.Command{
-		Use:   "init [package-name]",
+		Use:   "init <package-name> [version]",
 		Short: "Initialize a new project with a Project.json file",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.RangeArgs(1, 2), // Allow 1-2 args
 		Run:   commands.Init,
 	}
 	initCmd.Flags().StringP("language", "l", "", "Specify the project language (e.g., lua, terra)")
-	initCmd.Flags().StringP("version", "v", "", "Specify the initial version (default: v0.1.0)")
+	initCmd.Flags().StringP("version", "v", "", "Specify the initial version (e.g., v1.0.0; default: v0.1.0)")
 
 	var addCmd = &cobra.Command{
 		Use:   "add <package_name>@v<version_number>",

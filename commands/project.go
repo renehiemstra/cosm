@@ -5,6 +5,7 @@ import (
 	"cosm/types"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,8 +26,8 @@ func Activate(cmd *cobra.Command, args []string) {
 
 // Init initializes a new project with a Project.json file
 func Init(cmd *cobra.Command, args []string) {
-	packageName := validateInitArgs(args, cmd)
-	language, version := getInitFlags(cmd)
+	packageName, version := validateInitArgs(args, cmd)
+	language := getInitLanguageFlag(cmd)
 	validateVersion(version)
 	projectUUID := uuid.New().String()
 	authors := getGitAuthors()
@@ -47,6 +48,9 @@ func Add(cmd *cobra.Command, args []string) {
 	updateProjectWithDependency(project, packageName, versionTag, selectedPackage.RegistryName)
 }
 
+func Rm(cmd *cobra.Command, args []string) {
+}
+
 // Release updates the project version and publishes it to the remote repository and registries
 func Release(cmd *cobra.Command, args []string) {
 	project := loadProject("Project.json")
@@ -60,14 +64,23 @@ func Release(cmd *cobra.Command, args []string) {
 	ensureRegistriesExist(registries, registryName)
 	updateProjectVersion(project, newVersion)
 	publishToGitRemote(newVersion)
-	publishToRegistries(project, registries, newVersion)
+	publishToRegistries(project, registries, newVersion, getWorkingDir())
 	fmt.Printf("Released version '%s' for project '%s'\n", newVersion, project.Name)
 }
 
+func getWorkingDir() string {
+	projectDir, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error getting project directory: %v\n", err)
+		os.Exit(1)
+	}
+	return projectDir
+}
+
 // validateInitArgs checks the command-line arguments for validity
-func validateInitArgs(args []string, cmd *cobra.Command) string {
-	if len(args) == 0 {
-		fmt.Println("Error: Package name is required")
+func validateInitArgs(args []string, cmd *cobra.Command) (string, string) {
+	if len(args) < 1 || len(args) > 2 {
+		fmt.Println("Error: One or two arguments required (e.g., cosm init <package-name> [version])")
 		cmd.Usage()
 		os.Exit(1)
 	}
@@ -76,17 +89,31 @@ func validateInitArgs(args []string, cmd *cobra.Command) string {
 		fmt.Println("Error: Package name cannot be empty")
 		os.Exit(1)
 	}
-	return packageName
-}
 
-// getInitFlags retrieves the language and version flags from the command
-func getInitFlags(cmd *cobra.Command) (string, string) {
-	language, _ := cmd.Flags().GetString("language")
-	version, _ := cmd.Flags().GetString("version")
+	// Check version from args or flag
+	version := ""
+	if len(args) == 2 {
+		version = args[1]
+	}
+	flagVersion, _ := cmd.Flags().GetString("version")
+	if version != "" && flagVersion != "" {
+		fmt.Println("Error: Cannot specify version both as an argument and a flag")
+		cmd.Usage()
+		os.Exit(1)
+	}
+	if version == "" {
+		version = flagVersion
+	}
 	if version == "" {
 		version = "v0.1.0" // Default version
 	}
-	return language, version
+	return packageName, version
+}
+
+// getInitLanguageFlag retrieves the language flag from the command
+func getInitLanguageFlag(cmd *cobra.Command) string {
+	language, _ := cmd.Flags().GetString("language")
+	return language
 }
 
 // validateVersion ensures the version starts with 'v'
@@ -426,9 +453,9 @@ func determineNewVersion(cmd *cobra.Command, args []string, currentVersion strin
 	case patch:
 		return fmt.Sprintf("v%d.%d.%d", currentSemVer.Major, currentSemVer.Minor, currentSemVer.Patch+1)
 	case minor:
-		return fmt.Sprintf("v%d.%d.0", currentSemVer.Major, currentSemVer.Minor+1, 0)
+		return fmt.Sprintf("v%d.%d.0", currentSemVer.Major, currentSemVer.Minor+1)
 	case major:
-		return fmt.Sprintf("v%d.0.0", currentSemVer.Major+1, 0, 0)
+		return fmt.Sprintf("v%d.0.0", currentSemVer.Major+1)
 	}
 	return "" // Unreachable due to earlier checks
 }
@@ -441,8 +468,8 @@ type semVer struct {
 // parseSemVer parses a version string into a semVer struct
 func parseSemVer(version string) semVer {
 	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
-	if len(parts) != 3 {
-		fmt.Printf("Error: Invalid version format '%s'. Must be vX.Y.Z\n", version)
+	if len(parts) < 2 {
+		fmt.Printf("Error: Invalid version format '%s'. Must be vX.Y.Z or vX.Y\n", version)
 		os.Exit(1)
 	}
 	major, err := strconv.Atoi(parts[0])
@@ -455,10 +482,13 @@ func parseSemVer(version string) semVer {
 		fmt.Printf("Error: Invalid minor version in '%s': %v\n", version, err)
 		os.Exit(1)
 	}
-	patch, err := strconv.Atoi(parts[2])
-	if err != nil {
-		fmt.Printf("Error: Invalid patch version in '%s': %v\n", version, err)
-		os.Exit(1)
+	patch := 0
+	if len(parts) > 2 {
+		patch, err = strconv.Atoi(parts[2])
+		if err != nil {
+			fmt.Printf("Error: Invalid patch version in '%s': %v\n", version, err)
+			os.Exit(1)
+		}
 	}
 	return semVer{Major: major, Minor: minor, Patch: patch}
 }
@@ -499,7 +529,6 @@ func ensureTagDoesNotExist(newVersion string) {
 // registryInfo holds registry details for release
 type registryInfo struct {
 	Name       string
-	Dir        string
 	MetaFile   string
 	PackageDir string
 }
@@ -520,7 +549,6 @@ func findHostingRegistries(packageName, specificRegistry string) []registryInfo 
 			packageDir := filepath.Join(registriesDir, regName, strings.ToUpper(string(packageName[0])), packageName)
 			registries = append(registries, registryInfo{
 				Name:       regName,
-				Dir:        filepath.Join(registriesDir, regName),
 				MetaFile:   filepath.Join(registriesDir, regName, "registry.json"),
 				PackageDir: packageDir,
 			})
@@ -562,16 +590,17 @@ func publishToGitRemote(newVersion string) {
 }
 
 // publishToRegistries adds the new release to the specified registries
-func publishToRegistries(project *types.Project, registries []registryInfo, newVersion string) {
+func publishToRegistries(project *types.Project, registries []registryInfo, newVersion string, projectDir string) {
+	registryDir := setupRegistriesDir(getCosmDir())
 	for _, reg := range registries {
-		pullRegistryUpdates(reg.Dir, reg.Name)
-		updateRegistryVersions(reg.PackageDir, newVersion, project, reg.Name)
-		commitAndPushRegistryChanges(reg.Dir, reg.Name, project.Name, newVersion)
+		pullRegistryUpdates(registryDir, reg.Name)
+		updateRegistryVersions(reg.PackageDir, newVersion, project, reg.Name, projectDir)
+		commitAndPushRegistryChanges(registryDir, reg.Name, project.Name, newVersion)
 	}
 }
 
 // updateRegistryVersions updates versions.json and adds a specs file for the new version
-func updateRegistryVersions(packageDir, newVersion string, project *types.Project, registryName string) {
+func updateRegistryVersions(packageDir, newVersion string, project *types.Project, registryName, projectDir string) {
 	versionsFile := filepath.Join(packageDir, "versions.json")
 	var versions []string
 	if data, err := os.ReadFile(versionsFile); err == nil {
@@ -602,12 +631,8 @@ func updateRegistryVersions(packageDir, newVersion string, project *types.Projec
 		fmt.Printf("Error creating version directory '%s' in registry '%s': %v\n", versionDir, registryName, err)
 		os.Exit(1)
 	}
-	sha1Output, err := exec.Command("git", "rev-list", "-n", "1", newVersion).Output()
-	if err != nil {
-		fmt.Printf("Error getting SHA1 for tag '%s' in registry '%s': %v\n", newVersion, registryName, err)
-		os.Exit(1)
-	}
-	sha1 := strings.TrimSpace(string(sha1Output))
+	sha1 := getSHA1ForTag(newVersion, projectDir, fmt.Sprintf("registry '%s'", registryName))
+
 	specs := types.Specs{
 		Name:    project.Name,
 		UUID:    project.UUID,
@@ -628,7 +653,200 @@ func updateRegistryVersions(packageDir, newVersion string, project *types.Projec
 	}
 }
 
-func Rm(cmd *cobra.Command, args []string) {
+// getSHA1ForTag retrieves the SHA1 hash for a given tag in the specified directory
+func getSHA1ForTag(tag, dir, context string) string {
+	currentDir, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error getting current directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.Chdir(dir); err != nil {
+		fmt.Printf("Error changing to directory %s: %v\n", dir, err)
+		os.Exit(1)
+	}
+	sha1Output, err := exec.Command("git", "rev-list", "-n", "1", tag).Output()
+	if err != nil {
+		fmt.Printf("Error getting SHA1 for tag '%s' in %s: %v\n", tag, context, err)
+		os.Chdir(currentDir) // Restore directory before exiting
+		os.Exit(1)
+	}
+	if err := os.Chdir(currentDir); err != nil {
+		fmt.Printf("Error restoring directory to %s: %v\n", currentDir, err)
+		os.Exit(1)
+	}
+	return strings.TrimSpace(string(sha1Output))
+}
+
+// MakePackageAvailable copies the contents of a cloned package for a specific version
+// from ~/.cosm/clones/<UUID> to ~/.cosm/packages/<packageName>/<SHA1>, excluding Git-related files,
+// and ensures the clone is reverted to its previous state even on error.
+func MakePackageAvailable(cosmDir, registryName, packageName, versionTag string) error {
+	// Construct paths
+	registriesDir := filepath.Join(cosmDir, "registries")
+	specsFile := filepath.Join(registriesDir, registryName, strings.ToUpper(string(packageName[0])), packageName, versionTag, "specs.json")
+
+	// Load specs to get UUID and SHA1
+	data, err := os.ReadFile(specsFile)
+	if err != nil {
+		return fmt.Errorf("failed to read specs.json for %s@%s in registry %s: %v", packageName, versionTag, registryName, err)
+	}
+	var specs types.Specs
+	if err := json.Unmarshal(data, &specs); err != nil {
+		return fmt.Errorf("failed to parse specs.json for %s@%s: %v", packageName, versionTag, err)
+	}
+	if specs.Version != versionTag {
+		return fmt.Errorf("mismatched version in specs.json: expected %s, got %s", versionTag, specs.Version)
+	}
+	if specs.SHA1 == "" {
+		return fmt.Errorf("empty SHA1 in specs.json for %s@%s", packageName, versionTag)
+	}
+
+	// Locate clone directory
+	clonePath := filepath.Join(cosmDir, "clones", specs.UUID)
+	if _, err := os.Stat(clonePath); os.IsNotExist(err) {
+		return fmt.Errorf("clone directory for UUID %s not found at %s", specs.UUID, clonePath)
+	}
+
+	// Ensure clone is at the correct version
+	if err := checkoutVersion(clonePath, specs.SHA1); err != nil {
+		return fmt.Errorf("failed to checkout SHA1 %s for %s@%s: %v", specs.SHA1, packageName, versionTag, err)
+	}
+
+	// Create destination directory
+	destPath := filepath.Join(cosmDir, "packages", packageName, specs.SHA1)
+	if err := os.MkdirAll(destPath, 0755); err != nil {
+		if revertErr := revertClone(clonePath); revertErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to revert clone after error: %v\n", revertErr)
+		}
+		return fmt.Errorf("failed to create destination directory %s: %v", destPath, err)
+	}
+
+	// Copy files, excluding Git-related ones
+	err = filepath.Walk(clonePath, func(srcPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip .git directory and .gitignore files
+		if info.Name() == ".git" || info.Name() == ".gitignore" {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Compute relative path and destination
+		relPath, err := filepath.Rel(clonePath, srcPath)
+		if err != nil {
+			return fmt.Errorf("failed to compute relative path for %s: %v", srcPath, err)
+		}
+		if relPath == "." {
+			return nil // Skip root directory itself
+		}
+		destFile := filepath.Join(destPath, relPath)
+
+		// Handle directories
+		if info.IsDir() {
+			return os.MkdirAll(destFile, info.Mode())
+		}
+
+		// Copy file
+		return copyFile(srcPath, destFile, info.Mode())
+	})
+	if err != nil {
+		if revertErr := revertClone(clonePath); revertErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to revert clone after error: %v\n", revertErr)
+		}
+		return fmt.Errorf("failed to copy package files for %s@%s: %v", packageName, versionTag, err)
+	}
+
+	// Revert clone on success
+	if err := revertClone(clonePath); err != nil {
+		return fmt.Errorf("failed to revert clone for %s@%s: %v", packageName, versionTag, err)
+	}
+
+	return nil
+}
+
+// checkoutVersion switches the clone to the specified SHA1
+func checkoutVersion(clonePath, sha1 string) error {
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(currentDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to restore directory to %s: %v\n", currentDir, err)
+		}
+	}()
+
+	if err := os.Chdir(clonePath); err != nil {
+		return fmt.Errorf("failed to change to clone directory %s: %v", clonePath, err)
+	}
+
+	// Fetch updates to ensure we have the latest refs
+	if err := exec.Command("git", "fetch", "origin").Run(); err != nil {
+		return fmt.Errorf("failed to fetch updates: %v", err)
+	}
+
+	// Checkout the specific SHA1
+	cmd := exec.Command("git", "checkout", sha1)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to checkout SHA1 %s: %v\nOutput: %s", sha1, err, output)
+	}
+
+	return nil
+}
+
+// revertClone returns the clone to its previous branch or state using 'git checkout -'
+func revertClone(clonePath string) error {
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(currentDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to restore directory to %s: %v\n", currentDir, err)
+		}
+	}()
+
+	if err := os.Chdir(clonePath); err != nil {
+		return fmt.Errorf("failed to change to clone directory %s: %v", clonePath, err)
+	}
+
+	// Revert to the previous branch or commit state
+	cmd := exec.Command("git", "checkout", "-")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to revert clone to previous state: %v\nOutput: %s", err, output)
+	}
+
+	return nil
+}
+
+// copyFile copies a single file from src to dest using io.Copy
+func copyFile(src, dest string, mode os.FileMode) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("failed to open source file %s: %v", src, err)
+	}
+	defer srcFile.Close()
+
+	destFile, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return fmt.Errorf("failed to create destination file %s: %v", dest, err)
+	}
+	defer destFile.Close()
+
+	if _, err := io.Copy(destFile, srcFile); err != nil {
+		return fmt.Errorf("failed to copy file from %s to %s: %v", src, dest, err)
+	}
+
+	// Ensure the destination file has the same permissions as the source
+	if err := destFile.Chmod(mode); err != nil {
+		return fmt.Errorf("failed to set permissions on %s: %v", dest, err)
+	}
+
+	return nil
 }
 
 func Develop(cmd *cobra.Command, args []string) {
