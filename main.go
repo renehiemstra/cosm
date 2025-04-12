@@ -151,10 +151,11 @@ func main() {
 	}
 
 	var registryStatusCmd = &cobra.Command{
-		Use:   "status [registry-name]",
-		Short: "Print an overview of packages in a registry",
-		Args:  cobra.ExactArgs(1),
-		Run:   commands.RegistryStatus,
+		Use:          "status [registry-name]",
+		Short:        "Print an overview of packages in a registry",
+		Args:         cobra.ExactArgs(1),
+		RunE:         commands.RegistryStatus, // Changed from Run to RunE
+		SilenceUsage: true,                    // Prevent usage output in stderr
 	}
 
 	var registryInitCmd = &cobra.Command{

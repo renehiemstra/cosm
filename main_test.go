@@ -135,6 +135,27 @@ func TestAddDependency(t *testing.T) {
 	verifyProjectDependencies(t, filepath.Join(projectDir, "Project.json"), packageName, packageVersion)
 }
 
+func TestRegistryStatus(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Test 1: Successful status check with a valid registry
+	registryName := "myreg"
+	setupRegistry(t, tempDir, registryName)
+	stdout, stderr, err := runCommand(t, tempDir, "registry", "status", registryName)
+	expectedOutput := fmt.Sprintf("Registry Status for '%s':\n  No packages registered.\n", registryName)
+	checkOutput(t, stdout, stderr, expectedOutput, err, false, 0)
+
+	// Test 2: Error case with non-existent registry
+	invalidRegistry := "nonexistent"
+	stdout, stderr, err = runCommand(t, tempDir, "registry", "status", invalidRegistry)
+	expectedStderr := fmt.Sprintf("Error: registry '%s' not found in registries.json\n", invalidRegistry)
+	checkOutput(t, stdout, stderr, "", err, true, 1)
+	if stderr != expectedStderr {
+		t.Errorf("Expected stderr %q, got %q", expectedStderr, stderr)
+	}
+}
+
 func TestRegistryInit(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
