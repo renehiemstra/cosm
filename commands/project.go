@@ -135,7 +135,7 @@ func Release(cmd *cobra.Command, args []string) error {
 }
 
 // getWorkingDir retrieves the current working directory
-func getWorkingDir() (string, error) { // Changed to return (string, error)
+func getWorkingDir() (string, error) {
 	projectDir, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("failed to get project directory: %v", err)
@@ -144,7 +144,7 @@ func getWorkingDir() (string, error) { // Changed to return (string, error)
 }
 
 // validateInitArgs checks the command-line arguments for validity
-func validateInitArgs(args []string, cmd *cobra.Command) (string, string, error) { // Changed to return (string, string, error)
+func validateInitArgs(args []string, cmd *cobra.Command) (string, string, error) {
 	if len(args) < 1 || len(args) > 2 {
 		return "", "", fmt.Errorf("one or two arguments required (e.g., cosm init <package-name> [version])")
 	}
@@ -219,7 +219,7 @@ func createProject(packageName, projectUUID string, authors []string, language, 
 }
 
 // marshalProject converts the project struct to JSON
-func marshalProject(project types.Project) ([]byte, error) { // Changed to return ([]byte, error)
+func marshalProject(project types.Project) ([]byte, error) {
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal Project.json: %v", err) // Return error
@@ -228,7 +228,7 @@ func marshalProject(project types.Project) ([]byte, error) { // Changed to retur
 }
 
 // writeProjectFile writes the project data to Project.json
-func writeProjectFile(projectFile string, data []byte) error { // Changed to return error
+func writeProjectFile(projectFile string, data []byte) error {
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
 		return fmt.Errorf("failed to write Project.json: %v", err) // Return error
 	}
@@ -236,7 +236,7 @@ func writeProjectFile(projectFile string, data []byte) error { // Changed to ret
 }
 
 // parseAddArgs validates and parses the package_name@version argument
-func parseAddArgs(args []string) (string, string, error) { // Changed to return error
+func parseAddArgs(args []string) (string, string, error) {
 	if len(args) != 1 {
 		return "", "", fmt.Errorf("exactly one argument required in the format <package_name>@v<version_number> (e.g., cosm add mypkg@v1.2.3)")
 	}
@@ -256,7 +256,7 @@ func parseAddArgs(args []string) (string, string, error) { // Changed to return 
 }
 
 // loadProject reads and parses the Project.json file
-func loadProject(projectFile string) (*types.Project, error) { // Changed to return (*types.Project, error)
+func loadProject(projectFile string) (*types.Project, error) {
 	if _, err := os.Stat(projectFile); os.IsNotExist(err) {
 		return nil, fmt.Errorf("no Project.json found in current directory")
 	}
@@ -362,7 +362,7 @@ func findPackageInRegistry(packageName, versionTag, registriesDir, registryName 
 }
 
 // selectPackageFromResults handles the selection of a package from multiple matches
-func selectPackageFromResults(packageName, versionTag string, foundPackages []packageLocation) (packageLocation, error) { // Changed to return (packageLocation, error)
+func selectPackageFromResults(packageName, versionTag string, foundPackages []packageLocation) (packageLocation, error) {
 	if len(foundPackages) == 0 {
 		return packageLocation{}, fmt.Errorf("package '%s' with version '%s' not found in any registry", packageName, versionTag)
 	}
@@ -373,7 +373,7 @@ func selectPackageFromResults(packageName, versionTag string, foundPackages []pa
 }
 
 // promptUserForRegistry handles multiple registry matches by prompting the user
-func promptUserForRegistry(packageName, versionTag string, foundPackages []packageLocation) (packageLocation, error) { // Changed to return (packageLocation, error)
+func promptUserForRegistry(packageName, versionTag string, foundPackages []packageLocation) (packageLocation, error) {
 	fmt.Printf("Package '%s' v%s found in multiple registries:\n", packageName, versionTag)
 	for i, pkg := range foundPackages {
 		fmt.Printf("  %d. %s (Git URL: %s)\n", i+1, pkg.RegistryName, pkg.Specs.GitURL)
@@ -392,7 +392,7 @@ func promptUserForRegistry(packageName, versionTag string, foundPackages []packa
 }
 
 // updateProjectWithDependency adds the dependency and saves the updated project
-func updateProjectWithDependency(project *types.Project, packageName, versionTag string, registryName string) error { // Changed to return error
+func updateProjectWithDependency(project *types.Project, packageName, versionTag string, registryName string) error {
 	if _, exists := project.Deps[packageName]; exists {
 		return fmt.Errorf("dependency '%s' already exists in project", packageName)
 	}
@@ -410,7 +410,7 @@ func updateProjectWithDependency(project *types.Project, packageName, versionTag
 }
 
 // ensureRegistriesExist checks if any registries are available for the release
-func ensureRegistriesExist(registries []registryInfo, specificRegistry string) error { // Changed to return error
+func ensureRegistriesExist(registries []registryInfo, specificRegistry string) error {
 	if len(registries) == 0 {
 		if specificRegistry != "" {
 			return fmt.Errorf("no registry named '%s' hosts package", specificRegistry)
@@ -421,7 +421,7 @@ func ensureRegistriesExist(registries []registryInfo, specificRegistry string) e
 }
 
 // ensureNoUncommittedChanges checks for uncommitted changes in the Git repo
-func ensureNoUncommittedChanges() error { // Changed to return error
+func ensureNoUncommittedChanges() error {
 	statusCmd := exec.Command("git", "status", "--porcelain")
 	output, err := statusCmd.Output()
 	if err != nil {
@@ -434,7 +434,7 @@ func ensureNoUncommittedChanges() error { // Changed to return error
 }
 
 // ensureLocalRepoInSyncWithOrigin ensures the local repo is ahead or in sync with origin
-func ensureLocalRepoInSyncWithOrigin() error { // Changed to return error
+func ensureLocalRepoInSyncWithOrigin() error {
 	fetchCmd := exec.Command("git", "fetch", "origin")
 	if err := fetchCmd.Run(); err != nil {
 		return fmt.Errorf("failed to fetch from origin: %v", err)
@@ -453,7 +453,7 @@ func ensureLocalRepoInSyncWithOrigin() error { // Changed to return error
 }
 
 // determineNewVersion calculates the new version based on args or flags
-func determineNewVersion(cmd *cobra.Command, args []string, currentVersion string) (string, error) { // Fixed to include currentVersion
+func determineNewVersion(cmd *cobra.Command, args []string, currentVersion string) (string, error) {
 	if len(args) == 1 {
 		return args[0], nil
 	}
@@ -546,7 +546,7 @@ func validateNewVersion(newVersion, currentVersion string) error {
 }
 
 // ensureTagDoesNotExist checks if the new version tag already exists in the repo
-func ensureTagDoesNotExist(newVersion string) error { // Changed to return error
+func ensureTagDoesNotExist(newVersion string) error {
 	tagsCmd := exec.Command("git", "tag")
 	output, err := tagsCmd.Output()
 	if err != nil {
@@ -569,7 +569,7 @@ type registryInfo struct {
 }
 
 // findHostingRegistries identifies registries hosting the package
-func findHostingRegistries(packageName, specificRegistry string) ([]registryInfo, error) { // Changed to return ([]registryInfo, error)
+func findHostingRegistries(packageName, specificRegistry string) ([]registryInfo, error) {
 	cosmDir, err := getCosmDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cosm directory: %v", err)
@@ -602,7 +602,7 @@ func findHostingRegistries(packageName, specificRegistry string) ([]registryInfo
 }
 
 // updateProjectVersion updates the version in Project.json and saves it
-func updateProjectVersion(project *types.Project, newVersion string) error { // Changed to return error
+func updateProjectVersion(project *types.Project, newVersion string) error {
 	project.Version = newVersion
 	data, err := marshalProject(*project) // Fixed to handle two return values
 	if err != nil {
@@ -615,7 +615,7 @@ func updateProjectVersion(project *types.Project, newVersion string) error { // 
 }
 
 // publishToGitRemote commits, tags, and pushes the new version to the remote
-func publishToGitRemote(newVersion string) error { // Changed to return error
+func publishToGitRemote(newVersion string) error {
 	if err := exec.Command("git", "add", "Project.json").Run(); err != nil {
 		return fmt.Errorf("failed to stage Project.json: %v", err)
 	}
@@ -683,7 +683,7 @@ func restorePublishDir(originalDir string) error {
 }
 
 // updateRegistryVersions updates versions.json and adds a specs file for the new version
-func updateRegistryVersions(packageDir, newVersion string, project *types.Project, registryName, projectDir string) error { // Changed to return error
+func updateRegistryVersions(packageDir, newVersion string, project *types.Project, registryName, projectDir string) error {
 	versionsFile := filepath.Join(packageDir, "versions.json")
 	var versions []string
 	if data, err := os.ReadFile(versionsFile); err == nil {

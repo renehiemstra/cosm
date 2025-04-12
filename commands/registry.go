@@ -18,7 +18,7 @@ func Registry(cmd *cobra.Command, args []string) {
 }
 
 // RegistryStatus prints an overview of packages in a registry
-func RegistryStatus(cmd *cobra.Command, args []string) error { // Changed to return error
+func RegistryStatus(cmd *cobra.Command, args []string) error {
 	registryName, err := validateStatusArgs(args) // Updated to handle error
 	if err != nil {
 		return err
@@ -40,7 +40,7 @@ func RegistryStatus(cmd *cobra.Command, args []string) error { // Changed to ret
 }
 
 // RegistryInit initializes a new package registry
-func RegistryInit(cmd *cobra.Command, args []string) error { // Changed to return error
+func RegistryInit(cmd *cobra.Command, args []string) error {
 	originalDir, registryName, gitURL, registriesDir, err := setupAndParseInitArgs(args) // Updated to handle error
 	if err != nil {
 		return err
@@ -161,7 +161,7 @@ func restoreRegistryAddDir(originalDir string) error {
 }
 
 // cleanupTempClone removes the temporary clone directory
-func cleanupTempClone(tmpClonePath string) error { // Changed to return error
+func cleanupTempClone(tmpClonePath string) error {
 	if err := os.RemoveAll(tmpClonePath); err != nil {
 		return fmt.Errorf("failed to clean up temporary clone directory %s: %v", tmpClonePath, err)
 	}
@@ -208,7 +208,7 @@ func moveCloneToPermanentDir(cosmDir, tmpClonePath, packageUUID string) (string,
 }
 
 // assertRegistryExists verifies that the specified registry exists in registries.json
-func assertRegistryExists(registriesDir, registryName string) error { // Changed to return error
+func assertRegistryExists(registriesDir, registryName string) error {
 	registriesFile := filepath.Join(registriesDir, "registries.json")
 	if _, err := os.Stat(registriesFile); os.IsNotExist(err) {
 		return fmt.Errorf("no registries found (run 'cosm registry init' first)")
@@ -442,7 +442,7 @@ func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL strin
 }
 
 // setupAndParseInitArgs validates arguments and sets up directories for RegistryInit
-func setupAndParseInitArgs(args []string) (string, string, string, string, error) { // Changed to return error
+func setupAndParseInitArgs(args []string) (string, string, string, string, error) {
 	originalDir, err := os.Getwd()
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("failed to get original directory: %v", err)
@@ -474,7 +474,7 @@ func setupAndParseInitArgs(args []string) (string, string, string, string, error
 }
 
 // loadAndCheckRegistries loads registries.json and checks for duplicate registry names
-func loadAndCheckRegistries(registriesDir, registryName string) ([]string, error) { // Changed to return ([]string, error)
+func loadAndCheckRegistries(registriesDir, registryName string) ([]string, error) {
 	registriesFile := filepath.Join(registriesDir, "registries.json")
 	var registryNames []string
 	if data, err := os.ReadFile(registriesFile); err == nil {
@@ -508,7 +508,7 @@ func cleanupInit(originalDir, registrySubDir string, removeDir bool) {
 }
 
 // cloneAndEnterRegistry clones the repository into registries/<registryName> and changes to it
-func cloneAndEnterRegistry(registriesDir, registryName, gitURL string) (string, error) { // Changed to return (string, error)
+func cloneAndEnterRegistry(registriesDir, registryName, gitURL string) (string, error) {
 	registrySubDir := filepath.Join(registriesDir, registryName)
 	cloneCmd := exec.Command("git", "clone", gitURL, registrySubDir)
 	cloneOutput, err := cloneCmd.CombinedOutput()
@@ -524,7 +524,7 @@ func cloneAndEnterRegistry(registriesDir, registryName, gitURL string) (string, 
 }
 
 // ensureDirectoryEmpty checks if the cloned directory is empty except for .git
-func ensureDirectoryEmpty(dir, gitURL string) error { // Changed to return error
+func ensureDirectoryEmpty(dir, gitURL string) error {
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("failed to read directory %s: %v", dir, err)
@@ -538,7 +538,7 @@ func ensureDirectoryEmpty(dir, gitURL string) error { // Changed to return error
 }
 
 // updateRegistriesList adds the registry name to registries.json
-func updateRegistriesList(registriesDir string, registryNames []string, registryName string) error { // Changed to return error
+func updateRegistriesList(registriesDir string, registryNames []string, registryName string) error {
 	registryNames = append(registryNames, registryName)
 	data, err := json.MarshalIndent(registryNames, "", "  ")
 	if err != nil {
@@ -552,7 +552,7 @@ func updateRegistriesList(registriesDir string, registryNames []string, registry
 }
 
 // initializeRegistryMetadata creates and writes the registry.json file
-func initializeRegistryMetadata(registrySubDir, registryName, gitURL string) (string, error) { // Changed to return (string, error)
+func initializeRegistryMetadata(registrySubDir, registryName, gitURL string) (string, error) {
 	registryMetaFile := filepath.Join(registrySubDir, "registry.json")
 	registry := types.Registry{
 		Name:     registryName,
@@ -591,7 +591,7 @@ func commitAndPushInitialRegistryChanges(registryName, gitURL string) error {
 }
 
 // restoreOriginalDir returns to the original directory without removing the registry subdir
-func restoreOriginalDir(originalDir string) error { // Changed to return error
+func restoreOriginalDir(originalDir string) error {
 	if err := os.Chdir(originalDir); err != nil {
 		return fmt.Errorf("failed to return to original directory %s: %v", originalDir, err)
 	}
@@ -599,7 +599,7 @@ func restoreOriginalDir(originalDir string) error { // Changed to return error
 }
 
 // parseArgsAndSetup validates arguments and sets up directories for RegistryAdd
-func parseArgsAndSetup(args []string) (string, string, string, string, error) { // Changed to return error
+func parseArgsAndSetup(args []string) (string, string, string, string, error) {
 	if len(args) != 2 {
 		return "", "", "", "", fmt.Errorf("exactly two arguments required (e.g., cosm registry add <registry_name> <package giturl>)")
 	}
@@ -623,16 +623,16 @@ func parseArgsAndSetup(args []string) (string, string, string, string, error) { 
 }
 
 // prepareRegistry ensures the registry exists and is up-to-date
-func prepareRegistry(registriesDir, registryName string) error { // Changed to return error
+func prepareRegistry(registriesDir, registryName string) error {
 	assertRegistryExists(registriesDir, registryName)
-	if err := pullRegistryUpdates(registriesDir, registryName); err != nil { // Updated to handle error
+	if err := pullRegistryUpdates(registriesDir, registryName); err != nil {
 		return err
 	}
 	return nil
 }
 
 // enterCloneDir changes to the temporary clone directory
-func enterCloneDir(tmpClonePath string) error { // Changed to return error
+func enterCloneDir(tmpClonePath string) error {
 	if err := os.Chdir(tmpClonePath); err != nil {
 		cleanupErr := cleanupTempClone(tmpClonePath)
 		if cleanupErr != nil {
@@ -644,7 +644,7 @@ func enterCloneDir(tmpClonePath string) error { // Changed to return error
 }
 
 // ensurePackageNotRegistered checks if the package is already in the registry
-func ensurePackageNotRegistered(registry types.Registry, packageName, registryName, tmpClonePath string) error { // Changed to return error
+func ensurePackageNotRegistered(registry types.Registry, packageName, registryName, tmpClonePath string) error {
 	if _, exists := registry.Packages[packageName]; exists {
 		cleanupErr := cleanupTempClone(tmpClonePath)
 		if cleanupErr != nil {
@@ -666,7 +666,7 @@ func setupPackageDir(registriesDir, registryName, packageName string) (string, e
 }
 
 // updatePackageVersions updates versions.json with the specified tags
-func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL string, tags []string, project types.Project) error { // Changed to return error, removed tmpClonePath
+func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL string, tags []string, project types.Project) error {
 	versionsFile := filepath.Join(packageDir, "versions.json")
 	var versions []string
 	if data, err := os.ReadFile(versionsFile); err == nil {
@@ -728,7 +728,7 @@ func finalizePackageAddition(cosmDir, tmpClonePath, packageUUID string, registri
 }
 
 // validateStatusArgs checks the command-line arguments for validity
-func validateStatusArgs(args []string) (string, error) { // Changed to return (string, error)
+func validateStatusArgs(args []string) (string, error) {
 	if len(args) != 1 {
 		return "", fmt.Errorf("exactly one argument required (e.g., cosm registry status <registry_name>)")
 	}
@@ -745,7 +745,7 @@ func setupRegistriesDir(cosmDir string) string { // No change needed, kept for c
 }
 
 // printRegistryStatus displays the registry's package information
-func printRegistryStatus(registryName string, registry types.Registry) { // No error return needed, prints to stdout
+func printRegistryStatus(registryName string, registry types.Registry) {
 	fmt.Printf("Registry Status for '%s':\n", registryName)
 	if len(registry.Packages) == 0 {
 		fmt.Println("  No packages registered.")
