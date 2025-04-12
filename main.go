@@ -62,7 +62,7 @@ func main() {
 	rootCmd.Flags().BoolVarP(&versionFlag, "version", "v", false, "Print the version number")
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		if versionFlag {
-			commands.PrintVersion() // Call the refactored function
+			commands.PrintVersion()
 		}
 	}
 
@@ -79,19 +79,21 @@ func main() {
 	}
 
 	var initCmd = &cobra.Command{
-		Use:   "init <package-name> [version]",
-		Short: "Initialize a new project with a Project.json file",
-		Args:  cobra.RangeArgs(1, 2), // Allow 1-2 args
-		Run:   commands.Init,
+		Use:          "init <package-name> [version]",
+		Short:        "Initialize a new project with a Project.json file",
+		Args:         cobra.RangeArgs(1, 2),
+		RunE:         commands.Init,
+		SilenceUsage: true, // Prevent usage output in stderr
 	}
 	initCmd.Flags().StringP("language", "l", "", "Specify the project language (e.g., lua, terra)")
 	initCmd.Flags().StringP("version", "v", "", "Specify the initial version (e.g., v1.0.0; default: v0.1.0)")
 
 	var addCmd = &cobra.Command{
-		Use:   "add <package_name>@v<version_number>",
-		Short: "Add a dependency to the project",
-		Args:  cobra.ExactArgs(1),
-		Run:   commands.Add,
+		Use:          "add <package_name>@v<version_number>",
+		Short:        "Add a dependency to the project",
+		Args:         cobra.ExactArgs(1),
+		RunE:         commands.Add,
+		SilenceUsage: true, // Prevent usage output in stderr
 	}
 
 	var rmCmd = &cobra.Command{
@@ -105,7 +107,7 @@ func main() {
 		Use:   "release [v<version>]",
 		Short: "Update the project version and publish a release",
 		Args:  cobra.MaximumNArgs(1),
-		Run:   commands.Release,
+		RunE:  commands.Release,
 	}
 	releaseCmd.Flags().Bool("patch", false, "Increment the patch version")
 	releaseCmd.Flags().Bool("minor", false, "Increment the minor version")
@@ -156,10 +158,11 @@ func main() {
 	}
 
 	var registryInitCmd = &cobra.Command{
-		Use:   "init [registry-name] [giturl]",
-		Short: "Initialize a new registry",
-		Args:  cobra.ExactArgs(2),
-		Run:   commands.RegistryInit,
+		Use:          "init [registry-name] [giturl]",
+		Short:        "Initialize a new registry",
+		Args:         cobra.ExactArgs(2),
+		RunE:         commands.RegistryInit, // Changed from Run to RunE
+		SilenceUsage: true,                  // Prevent usage output in stderr
 	}
 
 	var registryCloneCmd = &cobra.Command{
@@ -189,7 +192,7 @@ func main() {
 		Use:   "add [registry-name] [giturl]",
 		Short: "Register a package version to a registry",
 		Args:  cobra.ExactArgs(2),
-		Run:   commands.RegistryAdd,
+		RunE:  commands.RegistryAdd,
 	}
 
 	var registryRmCmd = &cobra.Command{
@@ -221,7 +224,6 @@ func main() {
 	rootCmd.AddCommand(registryCmd)
 
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		os.Exit(1) // Remove manual error printing, let Cobra handle it
 	}
 }

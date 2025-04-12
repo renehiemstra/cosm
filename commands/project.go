@@ -25,47 +25,94 @@ func Activate(cmd *cobra.Command, args []string) {
 }
 
 // Init initializes a new project with a Project.json file
-func Init(cmd *cobra.Command, args []string) {
+func Init(cmd *cobra.Command, args []string) error {
 	packageName, version := validateInitArgs(args, cmd)
+	if packageName == "" {
+		return fmt.Errorf("invalid arguments")
+	}
 	language := getInitLanguageFlag(cmd)
-	validateVersion(version)
+	if version != "" {
+		if err := validateVersion(version); err != nil {
+			return err
+		}
+	}
 	projectUUID := uuid.New().String()
-	authors := getGitAuthors()
-	ensureProjectFileDoesNotExist("Project.json")
+	authors, err := getGitAuthors()
+	if err != nil {
+		return err
+	}
+	if err := ensureProjectFileDoesNotExist("Project.json"); err != nil {
+		return err
+	}
 	project := createProject(packageName, projectUUID, authors, language, version)
-	data := marshalProject(project)
-	writeProjectFile("Project.json", data)
+	data, err := marshalProject(project)
+	if err != nil {
+		return err
+	}
+	if err := writeProjectFile("Project.json", data); err != nil {
+		return err
+	}
 	fmt.Printf("Initialized project '%s' with version %s and UUID %s\n", packageName, version, projectUUID)
+	return nil
 }
 
 // Add adds a dependency to the project's Project.json file
-func Add(cmd *cobra.Command, args []string) {
-	packageName, versionTag := parseAddArgs(args)
-	project := loadProject("Project.json")
-	cosmDir := getCosmDir()
-	registryNames := loadRegistryNames(cosmDir)
-	selectedPackage := findPackageInRegistries(packageName, versionTag, cosmDir, registryNames)
-	updateProjectWithDependency(project, packageName, versionTag, selectedPackage.RegistryName)
+func Add(cmd *cobra.Command, args []string) error { // Changed to return error
+	packageName, versionTag, err := parseAddArgs(args) // Updated to handle error
+	if err != nil {
+		return err
+	}
+	project, err := loadProject("Project.json") // Updated to handle error
+	if err != nil {
+		return err
+	}
+	cosmDir, err := getCosmDir() // Updated to handle error
+	if err != nil {
+		return err
+	}
+	registryNames, err := loadRegistryNames(cosmDir) // Updated to handle error
+	if err != nil {
+		return err
+	}
+	selectedPackage, err := findPackageInRegistries(packageName, versionTag, cosmDir, registryNames) // Updated to handle error
+	if err != nil {
+		return err
+	}
+	if err := updateProjectWithDependency(project, packageName, versionTag, selectedPackage.RegistryName); err != nil { // Updated to handle error
+		return err
+	}
+	return nil
 }
 
 func Rm(cmd *cobra.Command, args []string) {
 }
 
 // Release updates the project version and publishes it to the remote repository and registries
-func Release(cmd *cobra.Command, args []string) {
-	project := loadProject("Project.json")
+func Release(cmd *cobra.Command, args []string) error {
+	project, err := loadProject("Project.json") // Fixed to handle two return values
+	if err != nil {
+		return err
+	}
 	ensureNoUncommittedChanges()
 	ensureLocalRepoInSyncWithOrigin()
-	newVersion := determineNewVersion(cmd, args, project.Version)
-	validateNewVersion(newVersion, project.Version)
+	newVersion, err := determineNewVersion(cmd, args, project.Version)
+	if err != nil {
+		return err
+	}
+	if err := validateNewVersion(newVersion, project.Version); err != nil {
+		return err
+	}
 	ensureTagDoesNotExist(newVersion)
 	registryName, _ := cmd.Flags().GetString("registry")
 	registries := findHostingRegistries(project.Name, registryName)
 	ensureRegistriesExist(registries, registryName)
-	updateProjectVersion(project, newVersion)
+	if err := updateProjectVersion(project, newVersion); err != nil {
+		return err
+	}
 	publishToGitRemote(newVersion)
 	publishToRegistries(project, registries, newVersion, getWorkingDir())
 	fmt.Printf("Released version '%s' for project '%s'\n", newVersion, project.Name)
+	return nil
 }
 
 func getWorkingDir() string {
@@ -117,32 +164,32 @@ func getInitLanguageFlag(cmd *cobra.Command) string {
 }
 
 // validateVersion ensures the version starts with 'v'
-func validateVersion(version string) {
-	if version[0] != 'v' {
-		fmt.Printf("Error: Version '%s' must start with 'v'\n", version)
-		os.Exit(1)
+func validateVersion(version string) error {
+	if len(version) == 0 || version[0] != 'v' {
+		return fmt.Errorf("version '%s' must start with 'v'", version)
 	}
+	return nil
 }
 
 // getGitAuthors retrieves the author info from git config or uses a default
-func getGitAuthors() []string {
+func getGitAuthors() ([]string, error) {
 	name, errName := exec.Command("git", "config", "user.name").Output()
 	email, errEmail := exec.Command("git", "config", "user.email").Output()
 	if errName != nil || errEmail != nil || len(name) == 0 || len(email) == 0 {
 		fmt.Println("Warning: Could not retrieve git user.name or user.email, defaulting to '[unknown]unknown@author.com'")
-		return []string{"[unknown]unknown@author.com"}
+		return []string{"[unknown]unknown@author.com"}, nil // Return default with no error
 	}
 	gitName := strings.TrimSpace(string(name))
 	gitEmail := strings.TrimSpace(string(email))
-	return []string{fmt.Sprintf("[%s]%s", gitName, gitEmail)}
+	return []string{fmt.Sprintf("[%s]%s", gitName, gitEmail)}, nil
 }
 
 // ensureProjectFileDoesNotExist checks if Project.json already exists
-func ensureProjectFileDoesNotExist(projectFile string) {
+func ensureProjectFileDoesNotExist(projectFile string) error {
 	if _, err := os.Stat(projectFile); !os.IsNotExist(err) {
-		fmt.Printf("Error: Project.json already exists in this directory\n")
-		os.Exit(1)
+		return fmt.Errorf("Project.json already exists in this directory")
 	}
+	return nil
 }
 
 // createProject constructs a new Project struct
@@ -158,102 +205,89 @@ func createProject(packageName, projectUUID string, authors []string, language, 
 }
 
 // marshalProject converts the project struct to JSON
-func marshalProject(project types.Project) []byte {
+func marshalProject(project types.Project) ([]byte, error) { // Changed to return ([]byte, error)
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
-		fmt.Printf("Error marshaling Project.json: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to marshal Project.json: %v", err) // Return error
 	}
-	return data
+	return data, nil
 }
 
 // writeProjectFile writes the project data to Project.json
-func writeProjectFile(projectFile string, data []byte) {
+func writeProjectFile(projectFile string, data []byte) error { // Changed to return error
 	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		fmt.Printf("Error writing Project.json: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to write Project.json: %v", err) // Return error
 	}
+	return nil
 }
 
 // parseAddArgs validates and parses the package_name@version argument
-func parseAddArgs(args []string) (string, string) {
+func parseAddArgs(args []string) (string, string, error) { // Changed to return error
 	if len(args) != 1 {
-		fmt.Println("Error: Exactly one argument required in the format <package_name>@v<version_number> (e.g., cosm add mypkg@v1.2.3)")
-		os.Exit(1)
+		return "", "", fmt.Errorf("exactly one argument required in the format <package_name>@v<version_number> (e.g., cosm add mypkg@v1.2.3)")
 	}
 	depArg := args[0]
 	parts := strings.SplitN(depArg, "@", 2)
 	if len(parts) != 2 {
-		fmt.Printf("Error: Argument '%s' must be in the format <package_name>@v<version_number>\n", depArg)
-		os.Exit(1)
+		return "", "", fmt.Errorf("argument '%s' must be in the format <package_name>@v<version_number>", depArg)
 	}
 	packageName, versionTag := parts[0], parts[1]
 	if packageName == "" {
-		fmt.Println("Error: Package name cannot be empty")
-		os.Exit(1)
+		return "", "", fmt.Errorf("package name cannot be empty")
 	}
 	if !strings.HasPrefix(versionTag, "v") {
-		fmt.Printf("Error: Version '%s' must start with 'v'\n", versionTag)
-		os.Exit(1)
+		return "", "", fmt.Errorf("version '%s' must start with 'v'", versionTag)
 	}
-	return packageName, versionTag
+	return packageName, versionTag, nil
 }
 
 // loadProject reads and parses the Project.json file
-func loadProject(projectFile string) *types.Project {
+func loadProject(projectFile string) (*types.Project, error) { // Changed to return (*types.Project, error)
 	if _, err := os.Stat(projectFile); os.IsNotExist(err) {
-		fmt.Printf("Error: No Project.json found in current directory\n")
-		os.Exit(1)
+		return nil, fmt.Errorf("no Project.json found in current directory")
 	}
 	data, err := os.ReadFile(projectFile)
 	if err != nil {
-		fmt.Printf("Error reading Project.json: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to read Project.json: %v", err)
 	}
 	var project types.Project
 	if err := json.Unmarshal(data, &project); err != nil {
-		fmt.Printf("Error parsing Project.json: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to parse Project.json: %v", err)
 	}
 	if project.Deps == nil {
 		project.Deps = make(map[string]string)
 	}
-	return &project
+	return &project, nil
 }
 
 // getCosmDir retrieves the global .cosm directory
-func getCosmDir() string {
+func getCosmDir() (string, error) { // Changed to return (string, error)
 	cosmDir, err := getGlobalCosmDir()
 	if err != nil {
-		fmt.Printf("Error getting global .cosm directory: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("failed to get global .cosm directory: %v", err)
 	}
-	return cosmDir
+	return cosmDir, nil
 }
 
 // loadRegistryNames loads the list of registry names from registries.json
-func loadRegistryNames(cosmDir string) []string {
+func loadRegistryNames(cosmDir string) ([]string, error) { // Changed to return ([]string, error)
 	registriesDir := filepath.Join(cosmDir, "registries")
 	registriesFile := filepath.Join(registriesDir, "registries.json")
 	if _, err := os.Stat(registriesFile); os.IsNotExist(err) {
-		fmt.Println("Error: No registries found (run 'cosm registry init' first)")
-		os.Exit(1)
+		return nil, fmt.Errorf("no registries found (run 'cosm registry init' first)")
 	}
 	data, err := os.ReadFile(registriesFile)
 	if err != nil {
-		fmt.Printf("Error reading registries.json: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to read registries.json: %v", err)
 	}
 	var registryNames []string
 	if err := json.Unmarshal(data, &registryNames); err != nil {
-		fmt.Printf("Error parsing registries.json: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to parse registries.json: %v", err)
 	}
 	if len(registryNames) == 0 {
-		fmt.Println("Error: No registries available to search for packages")
-		os.Exit(1)
+		return nil, fmt.Errorf("no registries available to search for packages")
 	}
-	return registryNames
+	return registryNames, nil
 }
 
 // packageLocation represents a package found in a registry
@@ -268,6 +302,20 @@ func restoreDirBeforeExit(currentDir string) {
 		fmt.Printf("Warning: Failed to restore directory to %s: %v\n", currentDir, err)
 		os.Exit(1)
 	}
+}
+
+// findPackageInRegistries searches for a package across all registries
+func findPackageInRegistries(packageName, versionTag, cosmDir string, registryNames []string) (packageLocation, error) { // Changed to return (packageLocation, error)
+	var foundPackages []packageLocation
+	registriesDir := filepath.Join(cosmDir, "registries")
+
+	for _, regName := range registryNames {
+		if pkg, found := findPackageInRegistry(packageName, versionTag, registriesDir, regName); found {
+			foundPackages = append(foundPackages, pkg)
+		}
+	}
+
+	return selectPackageFromResults(packageName, versionTag, foundPackages)
 }
 
 // findPackageInRegistry searches for a package in a single registry
@@ -301,33 +349,18 @@ func findPackageInRegistry(packageName, versionTag, registriesDir, registryName 
 }
 
 // selectPackageFromResults handles the selection of a package from multiple matches
-func selectPackageFromResults(packageName, versionTag string, foundPackages []packageLocation) packageLocation {
+func selectPackageFromResults(packageName, versionTag string, foundPackages []packageLocation) (packageLocation, error) { // Changed to return (packageLocation, error)
 	if len(foundPackages) == 0 {
-		fmt.Printf("Error: Package '%s' with version '%s' not found in any registry\n", packageName, versionTag)
-		os.Exit(1)
+		return packageLocation{}, fmt.Errorf("package '%s' with version '%s' not found in any registry", packageName, versionTag)
 	}
 	if len(foundPackages) == 1 {
-		return foundPackages[0]
+		return foundPackages[0], nil
 	}
 	return promptUserForRegistry(packageName, versionTag, foundPackages)
 }
 
-// findPackageInRegistries searches for a package across all registries
-func findPackageInRegistries(packageName, versionTag, cosmDir string, registryNames []string) packageLocation {
-	var foundPackages []packageLocation
-	registriesDir := filepath.Join(cosmDir, "registries")
-
-	for _, regName := range registryNames {
-		if pkg, found := findPackageInRegistry(packageName, versionTag, registriesDir, regName); found {
-			foundPackages = append(foundPackages, pkg)
-		}
-	}
-
-	return selectPackageFromResults(packageName, versionTag, foundPackages)
-}
-
 // promptUserForRegistry handles multiple registry matches by prompting the user
-func promptUserForRegistry(packageName, versionTag string, foundPackages []packageLocation) packageLocation {
+func promptUserForRegistry(packageName, versionTag string, foundPackages []packageLocation) (packageLocation, error) { // Changed to return (packageLocation, error)
 	fmt.Printf("Package '%s' v%s found in multiple registries:\n", packageName, versionTag)
 	for i, pkg := range foundPackages {
 		fmt.Printf("  %d. %s (Git URL: %s)\n", i+1, pkg.RegistryName, pkg.Specs.GitURL)
@@ -340,30 +373,27 @@ func promptUserForRegistry(packageName, versionTag string, foundPackages []packa
 	choiceNum := 0
 	_, err := fmt.Sscanf(choice, "%d", &choiceNum)
 	if err != nil || choiceNum < 1 || choiceNum > len(foundPackages) {
-		fmt.Printf("Error: Invalid selection '%s'. Must be a number between 1 and %d\n", choice, len(foundPackages))
-		os.Exit(1)
+		return packageLocation{}, fmt.Errorf("invalid selection '%s': must be a number between 1 and %d", choice, len(foundPackages))
 	}
-	return foundPackages[choiceNum-1]
+	return foundPackages[choiceNum-1], nil
 }
 
 // updateProjectWithDependency adds the dependency and saves the updated project
-func updateProjectWithDependency(project *types.Project, packageName, versionTag string, registryName string) {
+func updateProjectWithDependency(project *types.Project, packageName, versionTag string, registryName string) error { // Changed to return error
 	if _, exists := project.Deps[packageName]; exists {
-		fmt.Printf("Error: Dependency '%s' already exists in project\n", packageName)
-		os.Exit(1)
+		return fmt.Errorf("dependency '%s' already exists in project", packageName)
 	}
 	project.Deps[packageName] = versionTag
 
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
-		fmt.Printf("Error marshaling Project.json: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to marshal Project.json: %v", err)
 	}
 	if err := os.WriteFile("Project.json", data, 0644); err != nil {
-		fmt.Printf("Error writing Project.json: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to write Project.json: %v", err)
 	}
 	fmt.Printf("Added dependency '%s' %s from registry '%s' to project\n", packageName, versionTag, registryName)
+	return nil
 }
 
 // ensureRegistriesExist checks if any registries are available for the release
@@ -414,14 +444,12 @@ func ensureLocalRepoInSyncWithOrigin() {
 }
 
 // determineNewVersion calculates the new version based on args or flags
-func determineNewVersion(cmd *cobra.Command, args []string, currentVersion string) string {
+func determineNewVersion(cmd *cobra.Command, args []string, currentVersion string) (string, error) { // Fixed to include currentVersion
 	if len(args) == 1 {
-		return args[0]
+		return args[0], nil
 	}
 	if len(args) > 1 {
-		fmt.Println("Error: Too many arguments. Use 'cosm release v<version>' or a version flag (--patch, --minor, --major)")
-		cmd.Usage()
-		os.Exit(1)
+		return "", fmt.Errorf("too many arguments: use 'cosm release v<version>' or a version flag (--patch, --minor, --major)")
 	}
 
 	patch, _ := cmd.Flags().GetBool("patch")
@@ -438,26 +466,25 @@ func determineNewVersion(cmd *cobra.Command, args []string, currentVersion strin
 		count++
 	}
 	if count > 1 {
-		fmt.Println("Error: Only one of --patch, --minor, or --major can be specified")
-		cmd.Usage()
-		os.Exit(1)
+		return "", fmt.Errorf("only one of --patch, --minor, or --major can be specified")
 	}
 	if count == 0 {
-		fmt.Println("Error: Specify a version (e.g., v1.2.3) or use --patch, --minor, or --major")
-		cmd.Usage()
-		os.Exit(1)
+		return "", fmt.Errorf("specify a version (e.g., v1.2.3) or use --patch, --minor, or --major")
 	}
 
-	currentSemVer := parseSemVer(currentVersion)
+	currentSemVer, err := parseSemVer(currentVersion) // Fixed to handle two return values
+	if err != nil {
+		return "", fmt.Errorf("failed to parse current version: %v", err)
+	}
 	switch {
 	case patch:
-		return fmt.Sprintf("v%d.%d.%d", currentSemVer.Major, currentSemVer.Minor, currentSemVer.Patch+1)
+		return fmt.Sprintf("v%d.%d.%d", currentSemVer.Major, currentSemVer.Minor, currentSemVer.Patch+1), nil
 	case minor:
-		return fmt.Sprintf("v%d.%d.0", currentSemVer.Major, currentSemVer.Minor+1)
+		return fmt.Sprintf("v%d.%d.0", currentSemVer.Major, currentSemVer.Minor+1), nil
 	case major:
-		return fmt.Sprintf("v%d.0.0", currentSemVer.Major+1)
+		return fmt.Sprintf("v%d.0.0", currentSemVer.Major+1), nil
 	}
-	return "" // Unreachable due to earlier checks
+	return "", fmt.Errorf("internal error: no version increment selected") // Unreachable but added for safety
 }
 
 // semVer represents a semantic version (vX.Y.Z)
@@ -465,48 +492,48 @@ type semVer struct {
 	Major, Minor, Patch int
 }
 
-// parseSemVer parses a version string into a semVer struct
-func parseSemVer(version string) semVer {
+func parseSemVer(version string) (semVer, error) {
 	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
 	if len(parts) < 2 {
-		fmt.Printf("Error: Invalid version format '%s'. Must be vX.Y.Z or vX.Y\n", version)
-		os.Exit(1)
+		return semVer{}, fmt.Errorf("invalid version format '%s': must be vX.Y.Z or vX.Y", version)
 	}
 	major, err := strconv.Atoi(parts[0])
 	if err != nil {
-		fmt.Printf("Error: Invalid major version in '%s': %v\n", version, err)
-		os.Exit(1)
+		return semVer{}, fmt.Errorf("invalid major version in '%s': %v", version, err)
 	}
 	minor, err := strconv.Atoi(parts[1])
 	if err != nil {
-		fmt.Printf("Error: Invalid minor version in '%s': %v\n", version, err)
-		os.Exit(1)
+		return semVer{}, fmt.Errorf("invalid minor version in '%s': %v", version, err)
 	}
 	patch := 0
 	if len(parts) > 2 {
 		patch, err = strconv.Atoi(parts[2])
 		if err != nil {
-			fmt.Printf("Error: Invalid patch version in '%s': %v\n", version, err)
-			os.Exit(1)
+			return semVer{}, fmt.Errorf("invalid patch version in '%s': %v", version, err)
 		}
 	}
-	return semVer{Major: major, Minor: minor, Patch: patch}
+	return semVer{Major: major, Minor: minor, Patch: patch}, nil
 }
 
 // validateNewVersion ensures the new version is valid and greater than the current
-func validateNewVersion(newVersion, currentVersion string) {
+func validateNewVersion(newVersion, currentVersion string) error {
 	if !strings.HasPrefix(newVersion, "v") {
-		fmt.Printf("Error: New version '%s' must start with 'v'\n", newVersion)
-		os.Exit(1)
+		return fmt.Errorf("new version '%s' must start with 'v'", newVersion)
 	}
-	newSemVer := parseSemVer(newVersion)
-	currentSemVer := parseSemVer(currentVersion)
+	newSemVer, err := parseSemVer(newVersion)
+	if err != nil {
+		return err
+	}
+	currentSemVer, err := parseSemVer(currentVersion)
+	if err != nil {
+		return err
+	}
 	if newSemVer.Major < currentSemVer.Major ||
 		(newSemVer.Major == currentSemVer.Major && newSemVer.Minor < currentSemVer.Minor) ||
 		(newSemVer.Major == currentSemVer.Major && newSemVer.Minor == currentSemVer.Minor && newSemVer.Patch <= currentSemVer.Patch) {
-		fmt.Printf("Error: New version '%s' must be greater than current version '%s'\n", newVersion, currentVersion)
-		os.Exit(1)
+		return fmt.Errorf("new version '%s' must be greater than current version '%s'", newVersion, currentVersion)
 	}
+	return nil
 }
 
 // ensureTagDoesNotExist checks if the new version tag already exists in the repo
@@ -535,8 +562,16 @@ type registryInfo struct {
 
 // findHostingRegistries identifies registries hosting the package
 func findHostingRegistries(packageName, specificRegistry string) []registryInfo {
-	cosmDir := getCosmDir()
-	registryNames := loadRegistryNames(cosmDir)
+	cosmDir, err := getCosmDir() // Fixed to handle two return values
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+	registryNames, err := loadRegistryNames(cosmDir) // Fixed to handle two return values
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
 	registriesDir := filepath.Join(cosmDir, "registries")
 	var registries []registryInfo
 
@@ -558,10 +593,16 @@ func findHostingRegistries(packageName, specificRegistry string) []registryInfo 
 }
 
 // updateProjectVersion updates the version in Project.json and saves it
-func updateProjectVersion(project *types.Project, newVersion string) {
+func updateProjectVersion(project *types.Project, newVersion string) error { // Changed to return error
 	project.Version = newVersion
-	data := marshalProject(*project)
-	writeProjectFile("Project.json", data)
+	data, err := marshalProject(*project) // Fixed to handle two return values
+	if err != nil {
+		return err
+	}
+	if err := writeProjectFile("Project.json", data); err != nil { // Updated to handle error
+		return err
+	}
+	return nil
 }
 
 // publishToGitRemote commits, tags, and pushes the new version to the remote
@@ -591,7 +632,12 @@ func publishToGitRemote(newVersion string) {
 
 // publishToRegistries adds the new release to the specified registries
 func publishToRegistries(project *types.Project, registries []registryInfo, newVersion string, projectDir string) {
-	registryDir := setupRegistriesDir(getCosmDir())
+	cosmDir, err := getCosmDir() // Fixed to handle two return values
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+	registryDir := setupRegistriesDir(cosmDir) // Fixed to use cosmDir
 	for _, reg := range registries {
 		pullRegistryUpdates(registryDir, reg.Name)
 		updateRegistryVersions(reg.PackageDir, newVersion, project, reg.Name, projectDir)

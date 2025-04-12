@@ -20,7 +20,11 @@ func Registry(cmd *cobra.Command, args []string) {
 // RegistryStatus prints an overview of packages in a registry
 func RegistryStatus(cmd *cobra.Command, args []string) {
 	registryName := validateStatusArgs(args, cmd)
-	cosmDir := getCosmDir()
+	cosmDir, err := getCosmDir() // Fixed to handle two return values
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
 	registriesDir := setupRegistriesDir(cosmDir)
 	assertRegistryExists(registriesDir, registryName)
 	registry, _ := loadRegistryMetadata(registriesDir, registryName)
@@ -28,32 +32,62 @@ func RegistryStatus(cmd *cobra.Command, args []string) {
 }
 
 // RegistryInit initializes a new package registry
-func RegistryInit(cmd *cobra.Command, args []string) {
-	originalDir, registryName, gitURL, registriesDir := setupAndParseInitArgs(cmd, args)
-	registryNames := loadAndCheckRegistries(registriesDir, registryName)
-	registrySubDir := cloneAndEnterRegistry(registriesDir, registryName, gitURL, originalDir)
-	ensureDirectoryEmpty(registrySubDir, gitURL, originalDir)
-	updateRegistriesList(registriesDir, registryNames, registryName, originalDir, registrySubDir)
-	initializeRegistryMetadata(registrySubDir, registryName, gitURL, originalDir)
-	commitAndPushInitialRegistryChanges(registryName, gitURL, originalDir, registrySubDir)
-	restoreOriginalDir(originalDir, registrySubDir)
+func RegistryInit(cmd *cobra.Command, args []string) error { // Changed to return error
+	originalDir, registryName, gitURL, registriesDir, err := setupAndParseInitArgs(cmd, args) // Updated to handle error
+	if err != nil {
+		return err
+	}
+	registryNames, err := loadAndCheckRegistries(registriesDir, registryName) // Updated to handle error
+	if err != nil {
+		return err
+	}
+	registrySubDir, err := cloneAndEnterRegistry(registriesDir, registryName, gitURL, originalDir) // Updated to handle error
+	if err != nil {
+		return err
+	}
+	if err := ensureDirectoryEmpty(registrySubDir, gitURL, originalDir); err != nil { // Updated to handle error
+		cleanupInit(originalDir, registrySubDir, true)
+		return err
+	}
+	if err := updateRegistriesList(registriesDir, registryNames, registryName, originalDir, registrySubDir); err != nil { // Updated to handle error
+		cleanupInit(originalDir, registrySubDir, true)
+		return err
+	}
+	_, err = initializeRegistryMetadata(registrySubDir, registryName, gitURL, originalDir) // Updated to handle error
+	if err != nil {
+		cleanupInit(originalDir, registrySubDir, true)
+		return err
+	}
+	if err := commitAndPushInitialRegistryChanges(registryName, gitURL, originalDir, registrySubDir); err != nil { // Updated to handle error
+		cleanupInit(originalDir, registrySubDir, true)
+		return err
+	}
+	if err := restoreOriginalDir(originalDir, registrySubDir); err != nil { // Updated to handle error
+		return err
+	}
 	fmt.Printf("Initialized registry '%s' with Git URL: %s\n", registryName, gitURL)
+	return nil
 }
 
 // RegistryAdd adds a package version to a registry
-func RegistryAdd(cmd *cobra.Command, args []string) {
+func RegistryAdd(cmd *cobra.Command, args []string) error { // Changed to RunE with error return
 	registryName, packageGitURL, cosmDir, registriesDir := parseArgsAndSetup(cmd, args)
 	prepareRegistry(registriesDir, registryName)
 	registry, registryMetaFile := loadRegistryMetadata(registriesDir, registryName)
 	tmpClonePath := clonePackageToTempDir(cosmDir, packageGitURL)
 	enterCloneDir(tmpClonePath)
-	project := validateProjectFile(packageGitURL, tmpClonePath)
+	project, err := validateProjectFile(packageGitURL, tmpClonePath) // Fixed to handle two return values
+	if err != nil {
+		cleanupTempClone(tmpClonePath)
+		return err
+	}
 	ensurePackageNotRegistered(registry, project.Name, registryName, tmpClonePath)
 	validTags := validateAndCollectVersionTags(packageGitURL, project.Version, tmpClonePath)
 	packageDir := setupPackageDir(registriesDir, registryName, project.Name, tmpClonePath)
 	updatePackageVersions(packageDir, project.Name, project.UUID, packageGitURL, validTags, project, tmpClonePath)
 	finalizePackageAddition(cosmDir, tmpClonePath, project.UUID, registriesDir, registryName, project.Name, &registry, registryMetaFile, validTags[0])
 	fmt.Printf("Added package '%s' with UUID '%s' to registry '%s'\n", project.Name, project.UUID, registryName)
+	return nil
 }
 
 // cleanupTempClone removes the temporary clone directory
@@ -226,42 +260,33 @@ func commitAndPushRegistryChanges(registriesDir, registryName, packageName, vers
 }
 
 // validateProjectFile reads and validates Project.json, returning the project
-func validateProjectFile(packageGitURL, tmpClonePath string) types.Project {
+func validateProjectFile(packageGitURL, tmpClonePath string) (types.Project, error) { // Changed to return (types.Project, error)
 	data, err := os.ReadFile("Project.json")
 	if err != nil {
-		fmt.Printf("Error: Repository at '%s' does not contain a Project.json file\n", packageGitURL)
-		cleanupTempClone(tmpClonePath)
-		os.Exit(1)
+		return types.Project{}, fmt.Errorf("repository at '%s' does not contain a Project.json file: %v", packageGitURL, err)
 	}
 	var project types.Project
 	if err := json.Unmarshal(data, &project); err != nil {
-		fmt.Printf("Error: Invalid Project.json in repository at '%s': %v\n", packageGitURL, err)
-		cleanupTempClone(tmpClonePath)
-		os.Exit(1)
+		return types.Project{}, fmt.Errorf("invalid Project.json in repository at '%s': %v", packageGitURL, err)
 	}
 	if project.Name == "" {
-		fmt.Printf("Error: Project.json in repository at '%s' does not contain a valid package name\n", packageGitURL)
-		cleanupTempClone(tmpClonePath)
-		os.Exit(1)
+		return types.Project{}, fmt.Errorf("Project.json in repository at '%s' does not contain a valid package name", packageGitURL)
 	}
 	if project.UUID == "" {
-		fmt.Printf("Error: Project.json in repository at '%s' does not contain a valid UUID\n", packageGitURL)
-		cleanupTempClone(tmpClonePath)
-		os.Exit(1)
+		return types.Project{}, fmt.Errorf("Project.json in repository at '%s' does not contain a valid UUID", packageGitURL)
 	}
 	if _, err := uuid.Parse(project.UUID); err != nil {
-		fmt.Printf("Error: Invalid UUID '%s' in Project.json at '%s': %v\n", project.UUID, packageGitURL, err)
-		cleanupTempClone(tmpClonePath)
-		os.Exit(1)
+		return types.Project{}, fmt.Errorf("invalid UUID '%s' in Project.json at '%s': %v", project.UUID, packageGitURL, err)
 	}
 	if project.Version == "" {
-		fmt.Printf("Error: Project.json at '%s' does not contain a version\n", packageGitURL)
-		cleanupTempClone(tmpClonePath)
-		os.Exit(1)
+		return types.Project{}, fmt.Errorf("Project.json at '%s' does not contain a version", packageGitURL)
 	}
 	// Validate version parsing
-	_ = parseSemVer(project.Version) // Will exit if invalid
-	return project
+	_, err = parseSemVer(project.Version) // Fixed to handle both return values
+	if err != nil {
+		return types.Project{}, fmt.Errorf("invalid version in Project.json at '%s': %v", packageGitURL, err)
+	}
+	return project, nil
 }
 
 // validateAndCollectVersionTags fetches Git tags, or releases the current version if none exist
@@ -382,66 +407,56 @@ func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL strin
 }
 
 // setupAndParseInitArgs validates arguments and sets up directories for RegistryInit
-func setupAndParseInitArgs(cmd *cobra.Command, args []string) (string, string, string, string) {
+func setupAndParseInitArgs(cmd *cobra.Command, args []string) (string, string, string, string, error) { // Changed to return error
 	originalDir, err := os.Getwd()
 	if err != nil {
-		fmt.Printf("Error getting original directory: %v\n", err)
-		os.Exit(1)
+		return "", "", "", "", fmt.Errorf("failed to get original directory: %v", err)
 	}
 
 	if len(args) != 2 {
-		fmt.Println("Error: Exactly two arguments required (e.g., cosm registry init <registry name> <giturl>)")
-		cmd.Usage()
-		os.Exit(1)
+		return "", "", "", "", fmt.Errorf("exactly two arguments required (e.g., cosm registry init <registry name> <giturl>)")
 	}
 	registryName := args[0]
 	gitURL := args[1]
 
 	if registryName == "" {
-		fmt.Println("Error: Registry name cannot be empty")
-		os.Exit(1)
+		return "", "", "", "", fmt.Errorf("registry name cannot be empty")
 	}
 	if gitURL == "" {
-		fmt.Println("Error: Git URL cannot be empty")
-		os.Exit(1)
+		return "", "", "", "", fmt.Errorf("git URL cannot be empty")
 	}
 
 	cosmDir, err := getGlobalCosmDir()
 	if err != nil {
-		fmt.Printf("Error getting global .cosm directory: %v\n", err)
-		os.Exit(1)
+		return "", "", "", "", fmt.Errorf("failed to get global .cosm directory: %v", err)
 	}
 	registriesDir := filepath.Join(cosmDir, "registries")
 	if err := os.MkdirAll(registriesDir, 0755); err != nil {
-		fmt.Printf("Error creating %s directory: %v\n", registriesDir, err)
-		os.Exit(1)
+		return "", "", "", "", fmt.Errorf("failed to create %s directory: %v", registriesDir, err)
 	}
 
-	return originalDir, registryName, gitURL, registriesDir
+	return originalDir, registryName, gitURL, registriesDir, nil
 }
 
 // loadAndCheckRegistries loads registries.json and checks for duplicate registry names
-func loadAndCheckRegistries(registriesDir, registryName string) []string {
+func loadAndCheckRegistries(registriesDir, registryName string) ([]string, error) { // Changed to return ([]string, error)
 	registriesFile := filepath.Join(registriesDir, "registries.json")
 	var registryNames []string
 	if data, err := os.ReadFile(registriesFile); err == nil {
 		if err := json.Unmarshal(data, &registryNames); err != nil {
-			fmt.Printf("Error parsing registries.json: %v\n", err)
-			os.Exit(1)
+			return nil, fmt.Errorf("failed to parse registries.json: %v", err)
 		}
 	} else if !os.IsNotExist(err) {
-		fmt.Printf("Error reading registries.json: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to read registries.json: %v", err)
 	}
 
 	for _, name := range registryNames {
 		if name == registryName {
-			fmt.Printf("Error: Registry '%s' already exists\n", registryName)
-			os.Exit(1)
+			return nil, fmt.Errorf("registry '%s' already exists", registryName)
 		}
 	}
 
-	return registryNames
+	return registryNames, nil
 }
 
 // cleanupInit reverts to the original directory and removes the registrySubDir if needed
@@ -458,60 +473,51 @@ func cleanupInit(originalDir, registrySubDir string, removeDir bool) {
 }
 
 // cloneAndEnterRegistry clones the repository into registries/<registryName> and changes to it
-func cloneAndEnterRegistry(registriesDir, registryName, gitURL, originalDir string) string {
+func cloneAndEnterRegistry(registriesDir, registryName, gitURL, originalDir string) (string, error) { // Changed to return (string, error)
 	registrySubDir := filepath.Join(registriesDir, registryName)
 	cloneCmd := exec.Command("git", "clone", gitURL, registrySubDir)
 	cloneOutput, err := cloneCmd.CombinedOutput()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error cloning repository at '%s' into %s: %v\nOutput: %s\n", gitURL, registrySubDir, err, cloneOutput)
-		os.Exit(1) // No cleanup needed yet as registrySubDir isn’t created
+		return "", fmt.Errorf("failed to clone repository at '%s' into %s: %v\nOutput: %s", gitURL, registrySubDir, err, cloneOutput)
 	}
 
 	// Change to the cloned directory
 	if err := os.Chdir(registrySubDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Error changing to registry directory %s: %v\n", registrySubDir, err)
-		cleanupInit(originalDir, registrySubDir, true)
-		os.Exit(1)
+		return "", fmt.Errorf("failed to change to registry directory %s: %v", registrySubDir, err)
 	}
-	return registrySubDir
+	return registrySubDir, nil
 }
 
 // ensureDirectoryEmpty checks if the cloned directory is empty except for .git
-func ensureDirectoryEmpty(dir, gitURL, originalDir string) {
+func ensureDirectoryEmpty(dir, gitURL, originalDir string) error { // Changed to return error
 	files, err := os.ReadDir(dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading directory %s: %v\n", dir, err)
-		cleanupInit(originalDir, dir, true)
-		os.Exit(1)
+		return fmt.Errorf("failed to read directory %s: %v", dir, err)
 	}
 	for _, file := range files {
 		if file.Name() != ".git" { // Ignore .git directory
-			fmt.Fprintf(os.Stderr, "Error: Repository at '%s' cloned into %s is not empty (contains %s)\n", gitURL, dir, file.Name())
-			cleanupInit(originalDir, dir, true)
-			os.Exit(1)
+			return fmt.Errorf("repository at '%s' cloned into %s is not empty (contains %s)", gitURL, dir, file.Name())
 		}
 	}
+	return nil
 }
 
 // updateRegistriesList adds the registry name to registries.json
-func updateRegistriesList(registriesDir string, registryNames []string, registryName, originalDir, registrySubDir string) {
+func updateRegistriesList(registriesDir string, registryNames []string, registryName, originalDir, registrySubDir string) error { // Changed to return error
 	registryNames = append(registryNames, registryName)
 	data, err := json.MarshalIndent(registryNames, "", "  ")
 	if err != nil {
-		fmt.Printf("Error marshaling registries.json: %v\n", err)
-		cleanupInit(originalDir, registrySubDir, true)
-		os.Exit(1)
+		return fmt.Errorf("failed to marshal registries.json: %v", err)
 	}
 	registriesFile := filepath.Join(registriesDir, "registries.json")
 	if err := os.WriteFile(registriesFile, data, 0644); err != nil {
-		fmt.Printf("Error writing registries.json: %v\n", err)
-		cleanupInit(originalDir, registrySubDir, true)
-		os.Exit(1)
+		return fmt.Errorf("failed to write registries.json: %v", err)
 	}
+	return nil
 }
 
 // initializeRegistryMetadata creates and writes the registry.json file
-func initializeRegistryMetadata(registrySubDir, registryName, gitURL, originalDir string) string {
+func initializeRegistryMetadata(registrySubDir, registryName, gitURL, originalDir string) (string, error) { // Changed to return (string, error)
 	registryMetaFile := filepath.Join(registrySubDir, "registry.json")
 	registry := types.Registry{
 		Name:     registryName,
@@ -521,50 +527,40 @@ func initializeRegistryMetadata(registrySubDir, registryName, gitURL, originalDi
 	}
 	data, err := json.MarshalIndent(registry, "", "  ")
 	if err != nil {
-		fmt.Printf("Error marshaling registry.json: %v\n", err)
-		cleanupInit(originalDir, registrySubDir, true)
-		os.Exit(1)
+		return "", fmt.Errorf("failed to marshal registry.json: %v", err)
 	}
 	if err := os.WriteFile(registryMetaFile, data, 0644); err != nil {
-		fmt.Printf("Error writing registry.json: %v\n", err)
-		cleanupInit(originalDir, registrySubDir, true)
-		os.Exit(1)
+		return "", fmt.Errorf("failed to write registry.json: %v", err)
 	}
-	return registryMetaFile
+	return registryMetaFile, nil
 }
 
 // commitAndPushInitialRegistryChanges stages, commits, and pushes the initial registry changes
-func commitAndPushInitialRegistryChanges(registryName, gitURL, originalDir, registrySubDir string) {
+func commitAndPushInitialRegistryChanges(registryName, gitURL, originalDir, registrySubDir string) error { // Changed to return error
 	addCmd := exec.Command("git", "add", "registry.json")
 	addOutput, err := addCmd.CombinedOutput()
 	if err != nil {
-		fmt.Printf("Error staging registry.json: %v\nOutput: %s\n", err, addOutput)
-		cleanupInit(originalDir, registrySubDir, true)
-		os.Exit(1)
+		return fmt.Errorf("failed to stage registry.json: %v\nOutput: %s", err, addOutput)
 	}
 	commitCmd := exec.Command("git", "commit", "-m", fmt.Sprintf("Initialized registry %s", registryName))
 	commitOutput, err := commitCmd.CombinedOutput()
 	if err != nil {
-		fmt.Printf("Error committing initial registry setup: %v\nOutput: %s\n", err, commitOutput)
-		cleanupInit(originalDir, registrySubDir, true)
-		os.Exit(1)
+		return fmt.Errorf("failed to commit initial registry setup: %v\nOutput: %s", err, commitOutput)
 	}
 	pushCmd := exec.Command("git", "push", "origin", "main")
 	pushOutput, err := pushCmd.CombinedOutput()
 	if err != nil {
-		fmt.Printf("Error pushing initial commit to %s: %v\nOutput: %s\n", gitURL, err, pushOutput)
-		cleanupInit(originalDir, registrySubDir, true)
-		os.Exit(1)
+		return fmt.Errorf("failed to push initial commit to %s: %v\nOutput: %s", gitURL, err, pushOutput)
 	}
+	return nil
 }
 
 // restoreOriginalDir returns to the original directory without removing the registry subdir
-func restoreOriginalDir(originalDir, registrySubDir string) {
+func restoreOriginalDir(originalDir, registrySubDir string) error { // Changed to return error
 	if err := os.Chdir(originalDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Error returning to original directory %s: %v\n", originalDir, err)
-		cleanupInit(originalDir, registrySubDir, true)
-		os.Exit(1)
+		return fmt.Errorf("failed to return to original directory %s: %v", originalDir, err)
 	}
+	return nil
 }
 
 // parseArgsAndSetup validates arguments and sets up directories for RegistryAdd

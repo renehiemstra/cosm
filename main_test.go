@@ -85,7 +85,13 @@ func TestInitDuplicate(t *testing.T) {
 
 	// Try to initialize again
 	stdout, stderr, err := runCommand(t, packageDir, "init", packageName)
-	checkOutput(t, stdout, stderr, "Error: Project.json already exists in this directory\n", err, true, 1)
+	checkOutput(t, stdout, stderr, "", err, true, 1)
+
+	// Verify the error message in stderr
+	expectedStderr := "Error: Project.json already exists in this directory\n"
+	if stderr != expectedStderr {
+		t.Errorf("Expected stderr %q, got %q", expectedStderr, stderr)
+	}
 
 	// Verify the file didn’t change
 	dataBefore, err := os.ReadFile(filepath.Join(packageDir, "Project.json"))
@@ -138,7 +144,13 @@ func TestRegistryInit(t *testing.T) {
 
 	// Verify output (duplicate init should fail)
 	stdout, stderr, err := runCommand(t, tempDir, "registry", "init", registryName, createBareRepo(t, tempDir, "origin.git"))
-	checkOutput(t, stdout, stderr, "Error: Registry 'myreg' already exists\n", err, true, 1)
+	checkOutput(t, stdout, stderr, "", err, true, 1) // Changed expectedOutput to "" (empty stdout)
+
+	// Verify stderr contains the error message
+	expectedStderr := "Error: registry 'myreg' already exists\n"
+	if stderr != expectedStderr {
+		t.Errorf("Expected stderr %q, got %q", expectedStderr, stderr)
+	}
 
 	// Verify registries.json
 	registriesFile := filepath.Join(tempDir, ".cosm", "registries", "registries.json")
@@ -148,7 +160,7 @@ func TestRegistryInit(t *testing.T) {
 	registryMetaFile := filepath.Join(registryDir, "registry.json")
 	checkRegistryMetaFile(t, registryMetaFile, types.Registry{
 		Name:     registryName,
-		GitURL:   gitURL, // Use the actual gitURL from setupRegistry
+		GitURL:   gitURL,
 		Packages: make(map[string]string),
 	})
 }
