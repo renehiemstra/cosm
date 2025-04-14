@@ -33,3 +33,17 @@ type Specs struct {
 	SHA1    string            `json:"sha1"`
 	Deps    map[string]string `json:"deps"`
 }
+
+// BuildList represents the minimum version dependencies for a package version
+type BuildList struct {
+	Dependencies map[string]BuildListDependency `json:"dependencies"`
+}
+
+// BuildListDependency represents a single dependency in the build list
+type BuildListDependency struct {
+	Name    string `json:"name"`
+	UUID    string `json:"uuid"`
+	Version string `json:"version"`
+	GitURL  string `json:"giturl"`
+	SHA1    string `json:"sha1"`
+}

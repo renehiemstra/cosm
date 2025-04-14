@@ -73,9 +73,10 @@ func main() {
 	}
 
 	var activateCmd = &cobra.Command{
-		Use:   "activate",
-		Short: "Activate the current project",
-		Run:   commands.Activate,
+		Use:          "activate",
+		Short:        "Activate the current project",
+		RunE:         commands.Activate,
+		SilenceUsage: true, // Prevent usage output in stderr
 	}
 
 	var initCmd = &cobra.Command{

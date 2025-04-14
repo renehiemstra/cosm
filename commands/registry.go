@@ -123,7 +123,7 @@ func RegistryAdd(cmd *cobra.Command, args []string) error {
 		cleanupRegistryAdd(currentDir, tmpClonePath)
 		return err
 	}
-	if err := updatePackageVersions(packageDir, project.Name, project.UUID, packageGitURL, validTags, project); err != nil {
+	if err := updatePackageVersions(packageDir, project.Name, project.UUID, packageGitURL, validTags, project, registry, registriesDir, registryName); err != nil {
 		cleanupRegistryAdd(currentDir, tmpClonePath)
 		return err
 	}
@@ -136,7 +136,7 @@ func RegistryAdd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	cleanupRegistryAdd(currentDir, tmpClonePath) // Ensure tmpClonePath is removed in success path
-	fmt.Printf("Added package '%s' with UUID '%s' to registry '%s'\n", project.Name, project.UUID, registryName)
+	fmt.Printf("Added package '%s' with version '%s' to registry '%s'\n", project.Name, project.Version, registryName)
 	return nil
 }
 
@@ -358,7 +358,7 @@ func validateProjectFile(packageGitURL string) (types.Project, error) { // Chang
 		return types.Project{}, fmt.Errorf("Project.json at '%s' does not contain a version", packageGitURL)
 	}
 	// Validate version parsing
-	_, err = parseSemVer(project.Version) // Fixed to handle both return values
+	_, err = ParseSemVer(project.Version) // Fixed to handle both return values
 	if err != nil {
 		return types.Project{}, fmt.Errorf("invalid version in Project.json at '%s': %v", packageGitURL, err)
 	}
@@ -410,7 +410,7 @@ func contains(slice []string, item string) bool {
 }
 
 // addPackageVersion adds a single version to the package directory
-func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL string, versionTag string, project types.Project) error {
+func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, versionTag string, project types.Project, registry types.Registry, registriesDir, registryName string) error {
 	versionDir := filepath.Join(packageDir, versionTag)
 	if err := os.MkdirAll(versionDir, 0755); err != nil {
 		return fmt.Errorf("failed to create version directory %s: %v", versionDir, err)
@@ -438,7 +438,149 @@ func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL strin
 	if err := os.WriteFile(specsFile, data, 0644); err != nil {
 		return fmt.Errorf("failed to write specs.json for version '%s': %v", versionTag, err)
 	}
+
+	buildList, err := generateBuildList(project, registriesDir)
+	if err != nil {
+		return fmt.Errorf("failed to generate build list for version '%s': %v", versionTag, err)
+	}
+	data, err = json.MarshalIndent(buildList, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal buildlist.json for version '%s': %v", versionTag, err)
+	}
+	buildListFile := filepath.Join(versionDir, "buildlist.json")
+	if err := os.WriteFile(buildListFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write buildlist.json for version '%s': %v", versionTag, err)
+	}
 	return nil
+}
+
+// generateBuildList creates a build list using Minimum Version Selection (MVS),
+// including direct dependencies from project.Deps and transitive dependencies
+// from dependency build lists, taking the maximum version for shared dependencies.
+func generateBuildList(project types.Project, registriesDir string) (types.BuildList, error) {
+	buildList := types.BuildList{Dependencies: make(map[string]types.BuildListDependency)}
+
+	// Process direct dependencies
+	for depName, depVersion := range project.Deps {
+		depUUID, specs, depBuildList, err := findDependency(depName, depVersion, registriesDir)
+		if err != nil {
+			return types.BuildList{}, err
+		}
+		key, entry, err := createDependencyEntry(depName, depVersion, depUUID, specs)
+		if err != nil {
+			return types.BuildList{}, err
+		}
+		if err := mergeDependencyEntry(&buildList, key, entry); err != nil {
+			return types.BuildList{}, err
+		}
+		// Process transitive dependencies
+		for transKey, transDep := range depBuildList.Dependencies {
+			if err := mergeDependencyEntry(&buildList, transKey, transDep); err != nil {
+				return types.BuildList{}, err
+			}
+		}
+	}
+
+	return buildList, nil
+}
+
+// findDependency searches all registries for a dependency, returning its UUID, specs, and build list
+func findDependency(depName, depVersion, registriesDir string) (string, types.Specs, types.BuildList, error) {
+	registriesFile := filepath.Join(registriesDir, "registries.json")
+	var registryNames []string
+	if data, err := os.ReadFile(registriesFile); err == nil {
+		if err := json.Unmarshal(data, &registryNames); err != nil {
+			return "", types.Specs{}, types.BuildList{}, fmt.Errorf("failed to parse registries.json: %v", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", types.Specs{}, types.BuildList{}, fmt.Errorf("failed to read registries.json: %v", err)
+	}
+
+	for _, regName := range registryNames {
+		reg, _, err := loadRegistryMetadata(registriesDir, regName)
+		if err != nil {
+			continue
+		}
+		if uuid, exists := reg.Packages[depName]; exists {
+			specs, err := loadSpecs(registriesDir, regName, depName, depVersion)
+			if err != nil {
+				continue
+			}
+			if specs.Version != depVersion {
+				continue
+			}
+			buildList, err := loadBuildList(registriesDir, regName, depName, depVersion)
+			if err != nil {
+				return "", types.Specs{}, types.BuildList{}, fmt.Errorf("failed to load build list for '%s@%s' in registry '%s': %v", depName, depVersion, regName, err)
+			}
+			return uuid, specs, buildList, nil
+		}
+	}
+	return "", types.Specs{}, types.BuildList{}, fmt.Errorf("dependency '%s@%s' not found in any registry", depName, depVersion)
+}
+
+// createDependencyEntry builds a BuildListDependency entry with its key
+func createDependencyEntry(depName, depVersion, depUUID string, specs types.Specs) (string, types.BuildListDependency, error) {
+	majorVersion, err := GetMajorVersion(depVersion)
+	if err != nil {
+		return "", types.BuildListDependency{}, fmt.Errorf("failed to get major version for '%s@%s': %v", depName, depVersion, err)
+	}
+	key := fmt.Sprintf("%s@%s", depUUID, majorVersion)
+	entry := types.BuildListDependency{
+		Name:    depName,
+		UUID:    depUUID,
+		Version: depVersion,
+		GitURL:  specs.GitURL,
+		SHA1:    specs.SHA1,
+	}
+	return key, entry, nil
+}
+
+// mergeDependencyEntry adds or updates a dependency in the build list, keeping the higher version
+func mergeDependencyEntry(buildList *types.BuildList, key string, entry types.BuildListDependency) error {
+	if currEntry, exists := buildList.Dependencies[key]; exists {
+		maxVersion, err := MaxSemVer(currEntry.Version, entry.Version)
+		if err != nil {
+			return fmt.Errorf("failed to compare versions for '%s': %v", entry.Name, err)
+		}
+		if maxVersion == entry.Version {
+			buildList.Dependencies[key] = entry
+		}
+	} else {
+		buildList.Dependencies[key] = entry
+	}
+	return nil
+}
+
+// loadBuildList loads a package's build list from buildlist.json
+func loadBuildList(registriesDir, registryName, packageName, version string) (types.BuildList, error) {
+	buildListFile := filepath.Join(registriesDir, registryName, strings.ToUpper(string(packageName[0])), packageName, version, "buildlist.json")
+	data, err := os.ReadFile(buildListFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return types.BuildList{Dependencies: make(map[string]types.BuildListDependency)}, nil // No build list yet
+		}
+		return types.BuildList{}, fmt.Errorf("failed to read buildlist.json: %v", err)
+	}
+	var buildList types.BuildList
+	if err := json.Unmarshal(data, &buildList); err != nil {
+		return types.BuildList{}, fmt.Errorf("failed to parse buildlist.json: %v", err)
+	}
+	return buildList, nil
+}
+
+// loadSpecs loads a package's specs from specs.json
+func loadSpecs(registriesDir, registryName, packageName, version string) (types.Specs, error) {
+	specsFile := filepath.Join(registriesDir, registryName, strings.ToUpper(string(packageName[0])), packageName, version, "specs.json")
+	data, err := os.ReadFile(specsFile)
+	if err != nil {
+		return types.Specs{}, fmt.Errorf("failed to read specs.json: %v", err)
+	}
+	var specs types.Specs
+	if err := json.Unmarshal(data, &specs); err != nil {
+		return types.Specs{}, fmt.Errorf("failed to parse specs.json: %v", err)
+	}
+	return specs, nil
 }
 
 // setupAndParseInitArgs validates arguments and sets up directories for RegistryInit
@@ -666,7 +808,7 @@ func setupPackageDir(registriesDir, registryName, packageName string) (string, e
 }
 
 // updatePackageVersions updates versions.json with the specified tags
-func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL string, tags []string, project types.Project) error {
+func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL string, tags []string, project types.Project, registry types.Registry, registriesDir, registryName string) error {
 	versionsFile := filepath.Join(packageDir, "versions.json")
 	var versions []string
 	if data, err := os.ReadFile(versionsFile); err == nil {
@@ -679,7 +821,7 @@ func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL s
 	for _, tag := range tags {
 		if !contains(versions, tag) {
 			versions = append(versions, tag)
-			if err := addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, tag, project); err != nil { // Updated to handle error
+			if err := addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, tag, project, registry, registriesDir, registryName); err != nil {
 				return err
 			}
 		}

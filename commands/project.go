@@ -20,13 +20,44 @@ import (
 func Status(cmd *cobra.Command, args []string) {
 }
 
-// Activate activates the current project if cosm.json exists
-func Activate(cmd *cobra.Command, args []string) {
+// Activate computes the build list for the current project under development
+func Activate(cmd *cobra.Command, args []string) error {
+	project, projectStat, err := validateActivate(args)
+	if err != nil {
+		return err
+	}
+
+	needsBuildList, err := needsBuildListGeneration(projectStat)
+	if err != nil {
+		return err
+	}
+
+	if !needsBuildList {
+		fmt.Printf("Build list up-to-date in .cosm/buildlist.json\n")
+		return nil
+	}
+
+	if err := createEnvironmentFiles(); err != nil {
+		return err
+	}
+
+	cosmDir, err := getCosmDir()
+	if err != nil {
+		return fmt.Errorf("failed to get cosm directory: %v", err)
+	}
+	registriesDir := setupRegistriesDir(cosmDir)
+
+	if err := generateLocalBuildList(project, registriesDir); err != nil {
+		return err
+	}
+
+	fmt.Printf("Generated build list for %s in .cosm/buildlist.json\n", project.Name)
+	return nil
 }
 
 // Init initializes a new project with a Project.json file
 func Init(cmd *cobra.Command, args []string) error {
-	packageName, version, err := validateInitArgs(args, cmd) // Updated to handle three return values
+	packageName, version, err := validateInitArgs(args, cmd)
 	if err != nil {
 		return err
 	}
@@ -52,7 +83,7 @@ func Init(cmd *cobra.Command, args []string) error {
 	if err := writeProjectFile("Project.json", data); err != nil {
 		return err
 	}
-	fmt.Printf("Initialized project '%s' with version %s and UUID %s\n", packageName, version, projectUUID)
+	fmt.Printf("Initialized project '%s' with version %s\n", packageName, version)
 	return nil
 }
 
@@ -131,6 +162,101 @@ func Release(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Printf("Released version '%s' for project '%s'\n", newVersion, project.Name)
+	return nil
+}
+
+// validateActivate checks if the command is run in a valid package root with no arguments
+func validateActivate(args []string) (*types.Project, os.FileInfo, error) {
+	if len(args) != 0 {
+		return nil, nil, fmt.Errorf("cosm activate takes no arguments; run in package root with Project.json")
+	}
+	projectFile := "Project.json"
+	projectStat, err := os.Stat(projectFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("Project.json not found in current directory")
+		}
+		return nil, nil, fmt.Errorf("failed to stat Project.json: %v", err)
+	}
+	project, err := loadProject(projectFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse Project.json: %v", err)
+	}
+	return project, projectStat, nil
+}
+
+// needsBuildListGeneration checks if buildlist.json needs regeneration based on mod times
+func needsBuildListGeneration(projectStat os.FileInfo) (bool, error) {
+	buildListFile := ".cosm/buildlist.json"
+	buildListStat, err := os.Stat(buildListFile)
+	if err == nil {
+		return !buildListStat.ModTime().After(projectStat.ModTime()), nil
+	}
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	return false, fmt.Errorf("failed to stat %s: %v", buildListFile, err)
+}
+
+// createEnvironmentFiles creates .cosm directory, .env, and .bashrc
+func createEnvironmentFiles() error {
+	if err := os.MkdirAll(".cosm", 0755); err != nil {
+		return fmt.Errorf("failed to create .cosm directory: %v", err)
+	}
+	if err := os.WriteFile(".cosm/.env", []byte{}, 0644); err != nil {
+		return fmt.Errorf("failed to write .cosm/.env: %v", err)
+	}
+	const bashrcContent = `# signal that cosm prompt is active
+export COSM_PROMPT=1
+
+# supress depracation warning
+export BASH_SILENCE_DEPRECATION_WARNING=1
+
+# define cosm prompt
+function customp {
+    BOLD="\[$(tput bold)\]"
+    NORMAL="\[$(tput sgr0)\]"
+    GREEN="\[$(tput setaf 2)\]"
+    WHITE="\[$(tput setaf 7)\]"
+    PROMPT="\[cosm>\]"
+    PS1="$BOLD$GREEN$PROMPT$NORMAL$WHITE "
+}
+customp
+
+# reload environment variables in every command
+function before_command() {
+  case "$BASH_COMMAND" in
+    $PROMPT_COMMAND)
+      ;;
+    *)
+      if [ -f .cosm/.env ]; then
+        source .cosm/.env
+      fi
+      ;;
+  esac
+}
+trap before_command DEBUG
+`
+	if err := os.WriteFile(".cosm/.bashrc", []byte(bashrcContent), 0644); err != nil {
+		return fmt.Errorf("failed to write .cosm/.bashrc: %v", err)
+	}
+	return nil
+}
+
+// generateLocalBuildList computes and writes the build list to .cosm/buildlist.json
+func generateLocalBuildList(project *types.Project, registriesDir string) error {
+	buildList, err := generateBuildList(*project, registriesDir)
+	if err != nil {
+		return fmt.Errorf("failed to generate build list for %s: %v", project.Name, err)
+	}
+	data, err := json.MarshalIndent(buildList, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal buildlist.json: %v", err)
+	}
+	buildListFile := ".cosm/buildlist.json"
+	if err := os.WriteFile(buildListFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write %s: %v", buildListFile, err)
+	}
 	return nil
 }
 
@@ -481,7 +607,7 @@ func determineNewVersion(cmd *cobra.Command, args []string, currentVersion strin
 		return "", fmt.Errorf("specify a version (e.g., v1.2.3) or use --patch, --minor, or --major")
 	}
 
-	currentSemVer, err := parseSemVer(currentVersion) // Fixed to handle two return values
+	currentSemVer, err := ParseSemVer(currentVersion)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse current version: %v", err)
 	}
@@ -493,35 +619,7 @@ func determineNewVersion(cmd *cobra.Command, args []string, currentVersion strin
 	case major:
 		return fmt.Sprintf("v%d.0.0", currentSemVer.Major+1), nil
 	}
-	return "", fmt.Errorf("internal error: no version increment selected") // Unreachable but added for safety
-}
-
-// semVer represents a semantic version (vX.Y.Z)
-type semVer struct {
-	Major, Minor, Patch int
-}
-
-func parseSemVer(version string) (semVer, error) {
-	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
-	if len(parts) < 2 {
-		return semVer{}, fmt.Errorf("invalid version format '%s': must be vX.Y.Z or vX.Y", version)
-	}
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return semVer{}, fmt.Errorf("invalid major version in '%s': %v", version, err)
-	}
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return semVer{}, fmt.Errorf("invalid minor version in '%s': %v", version, err)
-	}
-	patch := 0
-	if len(parts) > 2 {
-		patch, err = strconv.Atoi(parts[2])
-		if err != nil {
-			return semVer{}, fmt.Errorf("invalid patch version in '%s': %v", version, err)
-		}
-	}
-	return semVer{Major: major, Minor: minor, Patch: patch}, nil
+	return "", fmt.Errorf("internal error: no version increment selected")
 }
 
 // validateNewVersion ensures the new version is valid and greater than the current
@@ -529,11 +627,11 @@ func validateNewVersion(newVersion, currentVersion string) error {
 	if !strings.HasPrefix(newVersion, "v") {
 		return fmt.Errorf("new version '%s' must start with 'v'", newVersion)
 	}
-	newSemVer, err := parseSemVer(newVersion)
+	newSemVer, err := ParseSemVer(newVersion)
 	if err != nil {
 		return err
 	}
-	currentSemVer, err := parseSemVer(currentVersion)
+	currentSemVer, err := ParseSemVer(currentVersion)
 	if err != nil {
 		return err
 	}
