@@ -63,7 +63,6 @@ func TestActivateSuccess(t *testing.T) {
 func TestActivateFailure(t *testing.T) {
 }
 
-// TestInit tests the cosm init command
 func TestInit(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
@@ -138,13 +137,12 @@ func TestInitDuplicate(t *testing.T) {
 	}
 }
 
-// TestAddDependency tests the cosm add command
 func TestAddDependency(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
 
 	// Setup registry
-	registryName := "myreg"
+	registryName := "newreg"
 	setupRegistry(t, tempDir, registryName)
 
 	// Setup package to be added as a dependency
@@ -165,6 +163,102 @@ func TestAddDependency(t *testing.T) {
 
 	// Verify dependency in Project.json
 	verifyProjectDependencies(t, filepath.Join(projectDir, "Project.json"), packageName, packageVersion)
+}
+
+func TestAddReplacesDependency(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Setup registry
+	registryName := "myreg"
+	setupRegistry(t, tempDir, registryName)
+
+	// Setup package E with versions v1.1.0, v1.2.0, v1.3.0
+	packageDir, registryDir := setupReleaseTestEnv(t, tempDir, registryName, "E", "v1.1.0")
+	executeAndVerifyRelease(t, registryDir, packageDir, "E", []string{"v1.1.0"}, "v1.2.0", "--minor")
+
+	// Initialize project
+	projectName := "myproject"
+	projectDir := initPackage(t, tempDir, projectName)
+
+	// Add dependency E@v1.3.0
+	stdout, stderr := addDependencyToProject(t, projectDir, "E", "v1.2.0")
+	expectedOutput := fmt.Sprintf("Added dependency '%s' v1.2.0 from registry '%s' to project\n", "E", registryName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+	verifyProjectDependencies(t, filepath.Join(projectDir, "Project.json"), "E", "v1.2.0")
+
+	// Replace with E@v1.1.0
+	stdout, stderr = addDependencyToProject(t, projectDir, "E", "v1.1.0")
+	expectedOutput = fmt.Sprintf("Added dependency '%s' v1.1.0 from registry '%s' to project\n", "E", registryName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+	verifyProjectDependencies(t, filepath.Join(projectDir, "Project.json"), "E", "v1.1.0")
+}
+func TestRmDependency(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Setup registry
+	registryName := "myreg"
+	setupRegistry(t, tempDir, registryName)
+
+	// Setup package to be added as a dependency
+	packageName := "mypkg"
+	packageVersion := "v0.1.0"
+	_, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
+	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
+
+	// Initialize project
+	projectName := "myproject"
+	projectDir := initPackage(t, tempDir, projectName)
+
+	// Add dependency to project
+	stdout, stderr := addDependencyToProject(t, projectDir, packageName, packageVersion)
+	expectedOutput := fmt.Sprintf("Added dependency '%s' %s from registry '%s' to project\n", packageName, packageVersion, registryName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+
+	// Verify dependency was added
+	verifyProjectDependencies(t, filepath.Join(projectDir, "Project.json"), packageName, packageVersion)
+
+	// Remove dependency
+	stdout, stderr, err := runCommand(t, projectDir, "rm", packageName)
+	expectedOutput = fmt.Sprintf("Removed dependency '%s' from project\n", packageName)
+	checkOutput(t, stdout, stderr, expectedOutput, err, false, 0)
+
+	// Verify dependency was removed
+	project := loadProjectFile(t, filepath.Join(projectDir, "Project.json"))
+	if _, exists := project.Deps[packageName]; exists {
+		t.Errorf("Expected dependency '%s' to be removed, but it still exists with version %s", packageName, project.Deps[packageName])
+	}
+}
+
+func TestRmNonExistentDependency(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Initialize project
+	projectName := "myproject"
+	projectDir := initPackage(t, tempDir, projectName)
+
+	// Try to remove a non-existent dependency
+	packageName := "nonexistent"
+	stdout, stderr, err := runCommand(t, projectDir, "rm", packageName)
+	expectedStderr := fmt.Sprintf("Error: dependency '%s' not found in project\n", packageName)
+	checkOutput(t, stdout, stderr, "", err, true, 1)
+	if stderr != expectedStderr {
+		t.Errorf("Expected stderr %q, got %q", expectedStderr, stderr)
+	}
+
+	// Verify Project.json remains unchanged
+	project := loadProjectFile(t, filepath.Join(projectDir, "Project.json"))
+	if len(project.Deps) != 0 {
+		t.Errorf("Expected no dependencies, got %v", project.Deps)
+	}
 }
 
 func TestRegistryStatus(t *testing.T) {
@@ -483,6 +577,26 @@ func TestMakePackageAvailable(t *testing.T) {
 	if finalBranch != initialBranch {
 		t.Errorf("Expected clone to revert to initial branch %q after error, got %q", initialBranch, finalBranch)
 	}
+}
+
+func TestMVSFigure1(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Step 1: Setup registry
+	registryName := "testreg"
+	setupRegistry(t, tempDir, registryName)
+
+	// Setup package E
+	packageDir, registryDir := setupReleaseTestEnv(t, tempDir, registryName, "E", "v1.1.0")
+	executeAndVerifyRelease(t, registryDir, packageDir, "E", []string{"v1.1.0", "v1.2.0"}, "v1.2.0", "--minor")
+	executeAndVerifyRelease(t, registryDir, packageDir, "E", []string{"v1.1.0", "v1.2.0", "v1.3.0"}, "v1.3.0", "--minor")
+
+	// Setup package D
+	packageDir, registryDir = setupReleaseTestEnv(t, tempDir, registryName, "D", "v1.1.0")
+	executeAndVerifyRelease(t, registryDir, packageDir, "D", []string{"v1.1.0", "v1.2.0"}, "v1.2.0", "--minor")
+	executeAndVerifyRelease(t, registryDir, packageDir, "D", []string{"v1.1.0", "v1.2.0", "v1.3.0"}, "v1.3.0", "--minor")
+
 }
 
 /////////////////////// SETUP HELPER FUNCTIONS ///////////////////////
@@ -1053,4 +1167,44 @@ func verifyRelease(t *testing.T, packageDir, registryDir, packageName, newVersio
 	verifyGitTag(t, packageDir, newVersion)
 	verifyRegistryUpdates(t, filepath.Join(registryDir, "M", packageName, "versions.json"), specs, newVersion, previousVersions)
 	verifySHA1Matches(t, packageDir, newVersion, specs)
+}
+
+// verifyBuildList checks the contents of buildlist.json against expected modules and versions
+func verifyBuildList(t *testing.T, buildListFile string, expected map[string]string) {
+	t.Helper()
+	data, err := os.ReadFile(buildListFile)
+	if err != nil {
+		t.Fatalf("Failed to read buildlist.json: %v", err)
+	}
+	var buildList types.BuildList
+	if err := json.Unmarshal(data, &buildList); err != nil {
+		t.Fatalf("Failed to parse buildlist.json: %v", err)
+	}
+
+	// Create a map of module names to versions from the build list
+	got := make(map[string]string)
+	for _, dep := range buildList.Dependencies {
+		got[dep.Name] = dep.Version
+	}
+
+	// Compare lengths
+	if len(got) != len(expected) {
+		t.Errorf("Expected %d modules in build list, got %d: %v", len(expected), len(got), got)
+	}
+
+	// Compare each expected module and version
+	for name, version := range expected {
+		if gotVersion, exists := got[name]; !exists {
+			t.Errorf("Expected module %s in build list, not found", name)
+		} else if gotVersion != version {
+			t.Errorf("Expected version %s for module %s, got %s", version, name, gotVersion)
+		}
+	}
+
+	// Ensure no unexpected modules
+	for name := range got {
+		if _, exists := expected[name]; !exists {
+			t.Errorf("Unexpected module %s in build list", name)
+		}
+	}
 }

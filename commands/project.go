@@ -115,7 +115,24 @@ func Add(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func Rm(cmd *cobra.Command, args []string) {
+// Rm removes a dependency from the project's Project.json file
+func Rm(cmd *cobra.Command, args []string) error {
+	packageName, err := parseRmArgs(args)
+	if err != nil {
+		return err
+	}
+	project, err := loadProject("Project.json")
+	if err != nil {
+		return err
+	}
+	if err := removeDependency(project, packageName); err != nil {
+		return err
+	}
+	if err := saveProject(project); err != nil {
+		return err
+	}
+	fmt.Printf("Removed dependency '%s' from project\n", packageName)
+	return nil
 }
 
 // Release updates the project version and publishes it to the remote repository and registries
@@ -162,6 +179,39 @@ func Release(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Printf("Released version '%s' for project '%s'\n", newVersion, project.Name)
+	return nil
+}
+
+// parseRmArgs validates and parses the package_name argument
+func parseRmArgs(args []string) (string, error) {
+	if len(args) != 1 {
+		return "", fmt.Errorf("exactly one argument required (e.g., cosm rm <package_name>)")
+	}
+	packageName := args[0]
+	if packageName == "" {
+		return "", fmt.Errorf("package name cannot be empty")
+	}
+	return packageName, nil
+}
+
+// removeDependency removes the specified dependency from the project
+func removeDependency(project *types.Project, packageName string) error {
+	if _, exists := project.Deps[packageName]; !exists {
+		return fmt.Errorf("dependency '%s' not found in project", packageName)
+	}
+	delete(project.Deps, packageName)
+	return nil
+}
+
+// saveProject saves the updated project to Project.json
+func saveProject(project *types.Project) error {
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal Project.json: %v", err)
+	}
+	if err := os.WriteFile("Project.json", data, 0644); err != nil {
+		return fmt.Errorf("failed to write Project.json: %v", err)
+	}
 	return nil
 }
 
@@ -517,11 +567,8 @@ func promptUserForRegistry(packageName, versionTag string, foundPackages []packa
 	return foundPackages[choiceNum-1], nil
 }
 
-// updateProjectWithDependency adds the dependency and saves the updated project
+// updateProjectWithDependency adds or updates the dependency and saves the project
 func updateProjectWithDependency(project *types.Project, packageName, versionTag string, registryName string) error {
-	if _, exists := project.Deps[packageName]; exists {
-		return fmt.Errorf("dependency '%s' already exists in project", packageName)
-	}
 	project.Deps[packageName] = versionTag
 
 	data, err := json.MarshalIndent(project, "", "  ")

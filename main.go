@@ -98,10 +98,11 @@ func main() {
 	}
 
 	var rmCmd = &cobra.Command{
-		Use:   "rm [name]",
-		Short: "Remove a dependency from the project",
-		Args:  cobra.ExactArgs(1),
-		Run:   commands.Rm,
+		Use:          "rm <package_name>",
+		Short:        "Remove a dependency from the project",
+		Args:         cobra.ExactArgs(1),
+		RunE:         commands.Rm,
+		SilenceUsage: true, // Prevent usage output in stderr
 	}
 
 	var releaseCmd = &cobra.Command{
