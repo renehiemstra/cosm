@@ -168,25 +168,28 @@ func main() {
 	}
 
 	var registryCloneCmd = &cobra.Command{
-		Use:   "clone [giturl]",
-		Short: "Clone a registry from a Git URL",
-		Args:  cobra.ExactArgs(1),
-		Run:   commands.RegistryClone,
+		Use:          "clone [giturl]",
+		Short:        "Clone a registry from a Git URL",
+		Args:         cobra.ExactArgs(1),
+		RunE:         commands.RegistryClone,
+		SilenceUsage: true, // Prevent usage output in stderr
 	}
 
 	var registryDeleteCmd = &cobra.Command{
-		Use:   "delete [registry-name]",
-		Short: "Delete a registry",
-		Args:  cobra.ExactArgs(1),
-		Run:   commands.RegistryDelete,
+		Use:          "delete [registry-name]",
+		Short:        "Delete a registry",
+		Args:         cobra.ExactArgs(1),
+		RunE:         commands.RegistryDelete,
+		SilenceUsage: true, // Prevent usage output in stderr
 	}
 	registryDeleteCmd.Flags().BoolP("force", "f", false, "Force deletion of the registry")
 
 	var registryUpdateCmd = &cobra.Command{
-		Use:   "update [registry-name | --all]",
-		Short: "Update and synchronize a registry with its remote",
-		Args:  cobra.MaximumNArgs(1),
-		Run:   commands.RegistryUpdate,
+		Use:          "update [registry-name | --all]",
+		Short:        "Update and synchronize a registry with its remote",
+		Args:         cobra.MaximumNArgs(1),
+		RunE:         commands.RegistryUpdate,
+		SilenceUsage: true, // Prevent usage output in stderr
 	}
 	registryUpdateCmd.Flags().Bool("all", false, "Update all registries")
 

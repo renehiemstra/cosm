@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"cosm/types"
 	"encoding/json"
 	"fmt"
@@ -31,7 +32,7 @@ func RegistryStatus(cmd *cobra.Command, args []string) error {
 	if err := assertRegistryExists(registriesDir, registryName); err != nil { // Updated to handle error
 		return err
 	}
-	registry, _, err := loadRegistryMetadata(registriesDir, registryName) // Already returns error
+	registry, _, err := LoadRegistryMetadata(registriesDir, registryName) // Already returns error
 	if err != nil {
 		return err
 	}
@@ -83,10 +84,10 @@ func RegistryAdd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := prepareRegistry(registriesDir, registryName); err != nil {
+	if err := updateSingleRegistry(registriesDir, registryName); err != nil {
 		return err
 	}
-	registry, registryMetaFile, err := loadRegistryMetadata(registriesDir, registryName)
+	registry, registryMetaFile, err := LoadRegistryMetadata(registriesDir, registryName)
 	if err != nil {
 		return err
 	}
@@ -123,7 +124,7 @@ func RegistryAdd(cmd *cobra.Command, args []string) error {
 		cleanupRegistryAdd(currentDir, tmpClonePath)
 		return err
 	}
-	if err := updatePackageVersions(packageDir, project.Name, project.UUID, packageGitURL, validTags, project, registry, registriesDir, registryName); err != nil {
+	if err := updatePackageVersions(packageDir, project.Name, project.UUID, packageGitURL, validTags, project, registriesDir); err != nil {
 		cleanupRegistryAdd(currentDir, tmpClonePath)
 		return err
 	}
@@ -137,6 +138,200 @@ func RegistryAdd(cmd *cobra.Command, args []string) error {
 	}
 	cleanupRegistryAdd(currentDir, tmpClonePath) // Ensure tmpClonePath is removed in success path
 	fmt.Printf("Added package '%s' with version '%s' to registry '%s'\n", project.Name, project.Version, registryName)
+	return nil
+}
+
+// RegistryDelete deletes a registry from the local system
+func RegistryDelete(cmd *cobra.Command, args []string) error {
+	registryName, err := validateStatusArgs(args) // Reusing validateStatusArgs for single argument check
+	if err != nil {
+		return err
+	}
+
+	cosmDir, err := getCosmDir()
+	if err != nil {
+		return err
+	}
+	registriesDir := setupRegistriesDir(cosmDir)
+
+	// Check if registry exists
+	if err := assertRegistryExists(registriesDir, registryName); err != nil {
+		return err
+	}
+
+	registryPath := filepath.Join(registriesDir, registryName)
+	if _, err := os.Stat(registryPath); os.IsNotExist(err) {
+		return fmt.Errorf("registry directory '%s' not found", registryName)
+	}
+
+	// Check for --force flag
+	force, _ := cmd.Flags().GetBool("force")
+	if !force {
+		fmt.Printf("Are you sure you want to delete registry '%s'? [y/N]: ", registryName)
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		response := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		if response != "y" && response != "yes" {
+			fmt.Println("Registry deletion cancelled.")
+			return nil
+		}
+	}
+
+	// Remove registry directory
+	if err := os.RemoveAll(registryPath); err != nil {
+		return fmt.Errorf("failed to delete registry directory '%s': %v", registryPath, err)
+	}
+
+	// Update registries.json
+	registryNames, err := loadRegistryNames(cosmDir)
+	if err != nil {
+		return err
+	}
+	var updatedNames []string
+	for _, name := range registryNames {
+		if name != registryName {
+			updatedNames = append(updatedNames, name)
+		}
+	}
+	data, err := json.MarshalIndent(updatedNames, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal registries.json: %v", err)
+	}
+	registriesFile := filepath.Join(registriesDir, "registries.json")
+	if err := os.WriteFile(registriesFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write registries.json: %v", err)
+	}
+
+	fmt.Printf("Deleted registry '%s'\n", registryName)
+	return nil
+}
+
+// RegistryClone clones a registry from a Git URL
+func RegistryClone(cmd *cobra.Command, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("exactly one argument required (e.g., cosm registry clone <giturl>)")
+	}
+	gitURL := args[0]
+	if gitURL == "" {
+		return fmt.Errorf("git URL cannot be empty")
+	}
+
+	cosmDir, err := getCosmDir()
+	if err != nil {
+		return err
+	}
+	registriesDir := setupRegistriesDir(cosmDir)
+
+	// Clone to a temporary directory to read registry.json
+	tmpDir, err := os.MkdirTemp("", "cosm-clone-")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary directory: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := exec.Command("git", "clone", gitURL, tmpDir).Run(); err != nil {
+		return fmt.Errorf("failed to clone repository at '%s': %v", gitURL, err)
+	}
+
+	// Read registry.json to get registry name
+	registryMetaFile := filepath.Join(tmpDir, "registry.json")
+	data, err := os.ReadFile(registryMetaFile)
+	if err != nil {
+		return fmt.Errorf("failed to read registry.json from cloned repository: %v", err)
+	}
+	var registry types.Registry
+	if err := json.Unmarshal(data, &registry); err != nil {
+		return fmt.Errorf("failed to parse registry.json: %v", err)
+	}
+	if registry.Name == "" {
+		return fmt.Errorf("registry.json does not contain a valid registry name")
+	}
+
+	// Check for existing registry
+	registryNames, err := loadRegistryNames(cosmDir)
+	if err != nil {
+		if !os.IsNotExist(err) && !strings.Contains(err.Error(), "no registries available") {
+			return err
+		}
+		registryNames = []string{} // Initialize empty list if registries.json is missing or empty
+	}
+	registryPath := filepath.Join(registriesDir, registry.Name)
+	if contains(registryNames, registry.Name) {
+		fmt.Printf("Registry '%s' already exists. Overwrite? [y/N]: ", registry.Name)
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		response := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		if response != "y" && response != "yes" {
+			fmt.Println("Registry clone cancelled.")
+			return nil
+		}
+		// Delete existing registry (without --force to align with prompt)
+		deleteCmd := &cobra.Command{}
+		if err := RegistryDelete(deleteCmd, []string{registry.Name}); err != nil {
+			return fmt.Errorf("failed to delete existing registry '%s': %v", registry.Name, err)
+		}
+	}
+
+	// Clone to final location
+	if err := exec.Command("git", "clone", gitURL, registryPath).Run(); err != nil {
+		return fmt.Errorf("failed to clone repository to '%s': %v", registryPath, err)
+	}
+
+	// Update registries.json
+	registryNames = append(registryNames, registry.Name)
+	data, err = json.MarshalIndent(registryNames, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal registries.json: %v", err)
+	}
+	registriesFile := filepath.Join(registriesDir, "registries.json")
+	if err := os.WriteFile(registriesFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write registries.json: %v", err)
+	}
+
+	fmt.Printf("Cloned registry '%s' from %s\n", registry.Name, gitURL)
+	return nil
+}
+
+// RegistryUpdate updates and synchronizes a registry or all registries with their remotes
+func RegistryUpdate(cmd *cobra.Command, args []string) error {
+	all, _ := cmd.Flags().GetBool("all")
+	if all && len(args) != 0 {
+		return fmt.Errorf("no arguments allowed with --all flag")
+	}
+	if !all && len(args) != 1 {
+		return fmt.Errorf("exactly one argument required (e.g., cosm registry update <registry_name>)")
+	}
+
+	cosmDir, err := getCosmDir()
+	if err != nil {
+		return err
+	}
+	registriesDir := setupRegistriesDir(cosmDir)
+
+	if all {
+		registryNames, err := loadRegistryNames(cosmDir)
+		if err != nil {
+			return fmt.Errorf("failed to load registry names: %v", err)
+		}
+		if len(registryNames) == 0 {
+			fmt.Println("No registries to update.")
+			return nil
+		}
+		for _, name := range registryNames {
+			if err := updateSingleRegistry(registriesDir, name); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to update registry '%s': %v\n", name, err)
+				continue
+			}
+			fmt.Printf("Updated registry '%s'\n", name)
+		}
+		return nil
+	}
+
+	registryName := args[0]
+	if err := updateSingleRegistry(registriesDir, registryName); err != nil {
+		return err
+	}
+	fmt.Printf("Updated registry '%s'\n", registryName)
 	return nil
 }
 
@@ -169,7 +364,7 @@ func cleanupTempClone(tmpClonePath string) error {
 }
 
 // clonePackageToTempDir creates a temp clone directly in the clones directory
-func clonePackageToTempDir(cosmDir, packageGitURL string) (string, error) { // Changed to return (string, error)
+func clonePackageToTempDir(cosmDir, packageGitURL string) (string, error) {
 	clonesDir := filepath.Join(cosmDir, "clones")
 	if err := os.MkdirAll(clonesDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create clones directory: %v", err)
@@ -229,29 +424,6 @@ func assertRegistryExists(registriesDir, registryName string) error {
 	return fmt.Errorf("registry '%s' not found in registries.json", registryName)
 }
 
-// pullRegistryUpdates pulls changes from the registry's remote Git repository
-func pullRegistryUpdates(registriesDir, registryName string) error {
-	currentDir, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get current directory: %v", err)
-	}
-	registryDir := filepath.Join(registriesDir, registryName)
-	if err := os.Chdir(registryDir); err != nil {
-		cleanupPull(currentDir)
-		return fmt.Errorf("failed to change to registry directory %s: %v", registryDir, err)
-	}
-	pullCmd := exec.Command("git", "pull", "origin", "main")
-	pullOutput, err := pullCmd.CombinedOutput()
-	if err != nil {
-		cleanupPull(currentDir)
-		return fmt.Errorf("failed to pull updates from registry '%s': %v\nOutput: %s", registryName, err, pullOutput)
-	}
-	if err := restorePullDir(currentDir); err != nil {
-		return err
-	}
-	return nil
-}
-
 // cleanupPull reverts to the original directory
 func cleanupPull(originalDir string) {
 	if err := os.Chdir(originalDir); err != nil {
@@ -267,8 +439,8 @@ func restorePullDir(originalDir string) error {
 	return nil
 }
 
-// loadRegistryMetadata loads and validates the registry metadata from registry.json
-func loadRegistryMetadata(registriesDir, registryName string) (types.Registry, string, error) { // Changed to return (types.Registry, string, error)
+// LoadRegistryMetadata loads and validates the registry metadata from registry.json
+func LoadRegistryMetadata(registriesDir, registryName string) (types.Registry, string, error) {
 	registryMetaFile := filepath.Join(registriesDir, registryName, "registry.json")
 	data, err := os.ReadFile(registryMetaFile)
 	if err != nil {
@@ -336,7 +508,7 @@ func restoreCommitDir(originalDir string) error {
 }
 
 // validateProjectFile reads and validates Project.json, returning the project
-func validateProjectFile(packageGitURL string) (types.Project, error) { // Changed to return (types.Project, error)
+func validateProjectFile(packageGitURL string) (types.Project, error) {
 	data, err := os.ReadFile("Project.json")
 	if err != nil {
 		return types.Project{}, fmt.Errorf("repository at '%s' does not contain a Project.json file: %v", packageGitURL, err)
@@ -410,7 +582,7 @@ func contains(slice []string, item string) bool {
 }
 
 // addPackageVersion adds a single version to the package directory
-func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, versionTag string, project types.Project, registry types.Registry, registriesDir, registryName string) error {
+func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, versionTag string, project types.Project, registriesDir string) error {
 	versionDir := filepath.Join(packageDir, versionTag)
 	if err := os.MkdirAll(versionDir, 0755); err != nil {
 		return fmt.Errorf("failed to create version directory %s: %v", versionDir, err)
@@ -497,7 +669,7 @@ func findDependency(depName, depVersion, registriesDir string) (string, types.Sp
 	}
 
 	for _, regName := range registryNames {
-		reg, _, err := loadRegistryMetadata(registriesDir, regName)
+		reg, _, err := LoadRegistryMetadata(registriesDir, regName)
 		if err != nil {
 			continue
 		}
@@ -764,15 +936,6 @@ func parseArgsAndSetup(args []string) (string, string, string, string, error) {
 	return registryName, packageGitURL, cosmDir, registriesDir, nil
 }
 
-// prepareRegistry ensures the registry exists and is up-to-date
-func prepareRegistry(registriesDir, registryName string) error {
-	assertRegistryExists(registriesDir, registryName)
-	if err := pullRegistryUpdates(registriesDir, registryName); err != nil {
-		return err
-	}
-	return nil
-}
-
 // enterCloneDir changes to the temporary clone directory
 func enterCloneDir(tmpClonePath string) error {
 	if err := os.Chdir(tmpClonePath); err != nil {
@@ -808,7 +971,7 @@ func setupPackageDir(registriesDir, registryName, packageName string) (string, e
 }
 
 // updatePackageVersions updates versions.json with the specified tags
-func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL string, tags []string, project types.Project, registry types.Registry, registriesDir, registryName string) error {
+func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL string, tags []string, project types.Project, registriesDir string) error {
 	versionsFile := filepath.Join(packageDir, "versions.json")
 	var versions []string
 	if data, err := os.ReadFile(versionsFile); err == nil {
@@ -821,7 +984,7 @@ func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL s
 	for _, tag := range tags {
 		if !contains(versions, tag) {
 			versions = append(versions, tag)
-			if err := addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, tag, project, registry, registriesDir, registryName); err != nil {
+			if err := addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, tag, project, registriesDir); err != nil {
 				return err
 			}
 		}
@@ -882,7 +1045,7 @@ func validateStatusArgs(args []string) (string, error) {
 }
 
 // setupRegistriesDir constructs the registries directory path
-func setupRegistriesDir(cosmDir string) string { // No change needed, kept for context
+func setupRegistriesDir(cosmDir string) string {
 	return filepath.Join(cosmDir, "registries")
 }
 
@@ -899,13 +1062,30 @@ func printRegistryStatus(registryName string, registry types.Registry) {
 	}
 }
 
-func RegistryClone(cmd *cobra.Command, args []string) {
-}
-
-func RegistryDelete(cmd *cobra.Command, args []string) {
-}
-
-func RegistryUpdate(cmd *cobra.Command, args []string) {
+// updateSingleRegistry pulls updates for a single registry
+func updateSingleRegistry(registriesDir, registryName string) error {
+	if err := assertRegistryExists(registriesDir, registryName); err != nil {
+		return err
+	}
+	registryDir := filepath.Join(registriesDir, registryName)
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %v", err)
+	}
+	if err := os.Chdir(registryDir); err != nil {
+		cleanupPull(currentDir)
+		return fmt.Errorf("failed to change to registry directory %s: %v", registryDir, err)
+	}
+	pullCmd := exec.Command("git", "pull", "origin", "main")
+	pullOutput, err := pullCmd.CombinedOutput()
+	if err != nil {
+		cleanupPull(currentDir)
+		return fmt.Errorf("failed to pull updates for registry '%s': %v\nOutput: %s", registryName, err, pullOutput)
+	}
+	if err := restorePullDir(currentDir); err != nil {
+		return err
+	}
+	return nil
 }
 
 func RegistryRm(cmd *cobra.Command, args []string) {

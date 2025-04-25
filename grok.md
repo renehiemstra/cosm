@@ -2,6 +2,7 @@ I am writing a package (registry) manager in go. The file structure is:
 
 cosm/main.go
 cosm/main_test.go
+cosm/testutils.go
 cosm/types/types.go
 cosm/commands/project.go
 cosm/commands/registry.go

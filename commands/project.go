@@ -401,7 +401,7 @@ func loadProject(projectFile string) (*types.Project, error) {
 }
 
 // getCosmDir retrieves the global .cosm directory
-func getCosmDir() (string, error) { // Changed to return (string, error)
+func getCosmDir() (string, error) {
 	cosmDir, err := getGlobalCosmDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get global .cosm directory: %v", err)
@@ -410,7 +410,7 @@ func getCosmDir() (string, error) { // Changed to return (string, error)
 }
 
 // loadRegistryNames loads the list of registry names from registries.json
-func loadRegistryNames(cosmDir string) ([]string, error) { // Changed to return ([]string, error)
+func loadRegistryNames(cosmDir string) ([]string, error) {
 	registriesDir := filepath.Join(cosmDir, "registries")
 	registriesFile := filepath.Join(registriesDir, "registries.json")
 	if _, err := os.Stat(registriesFile); os.IsNotExist(err) {
@@ -456,11 +456,11 @@ func findPackageInRegistries(packageName, versionTag, cosmDir string, registryNa
 
 // findPackageInRegistry searches for a package in a single registry
 func findPackageInRegistry(packageName, versionTag, registriesDir, registryName string) (packageLocation, bool, error) {
-	// Load registry metadata after pull
-	if err := pullRegistryUpdates(registriesDir, registryName); err != nil {
+	// Update registry before loading metadata
+	if err := updateSingleRegistry(registriesDir, registryName); err != nil {
 		return packageLocation{}, false, err
 	}
-	registry, _, err := loadRegistryMetadata(registriesDir, registryName) // Fixed to handle error
+	registry, _, err := LoadRegistryMetadata(registriesDir, registryName) // Fixed to handle error
 	if err != nil {
 		return packageLocation{}, false, fmt.Errorf("failed to load registry metadata for '%s': %v", registryName, err)
 	}
@@ -683,7 +683,7 @@ func findHostingRegistries(packageName, specificRegistry string) ([]registryInfo
 		if specificRegistry != "" && regName != specificRegistry {
 			continue
 		}
-		registry, registryMetaFile, err := loadRegistryMetadata(registriesDir, regName) // Updated to handle error
+		registry, registryMetaFile, err := LoadRegistryMetadata(registriesDir, regName) // Updated to handle error
 		if err != nil {
 			return nil, fmt.Errorf("failed to load registry metadata for '%s': %v", regName, err)
 		}
@@ -746,9 +746,9 @@ func publishToRegistries(project *types.Project, registries []registryInfo, newV
 	}
 	registryDir := setupRegistriesDir(cosmDir)
 	for _, reg := range registries {
-		if err := pullRegistryUpdates(registryDir, reg.Name); err != nil {
+		if err := updateSingleRegistry(registryDir, reg.Name); err != nil {
 			cleanupPublish(currentDir)
-			return fmt.Errorf("failed to pull registry updates for '%s': %v", reg.Name, err)
+			return fmt.Errorf("failed to update registry '%s': %v", reg.Name, err)
 		}
 		if err := updateRegistryVersions(reg.PackageDir, newVersion, project, reg.Name, projectDir); err != nil {
 			cleanupPublish(currentDir)

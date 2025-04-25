@@ -21,12 +21,6 @@ var projectRoot string
 // binaryPath holds the path to the compiled cosm binary
 var binaryPath string
 
-// testProject represents a package configuration for testing with a Git URL
-type testProject struct {
-	types.Project
-	GitURL string
-}
-
 // setupRegistry initializes a registry with a bare Git remote using cosm registry init
 func setupRegistry(t *testing.T, tempDir, registryName string) (string, string) {
 	gitURL := createBareRepo(t, tempDir, registryName+".git")
@@ -179,40 +173,6 @@ func setupTempGitConfig(t *testing.T, tempDir string) string {
 	return tempGitConfig
 }
 
-// setupRegistryWithPackages sets up a registry with pre-initialized packages
-func setupRegistryWithPackages(t *testing.T, tempDir, registryName string, packages []testProject) string {
-	_, registryDir := setupRegistry(t, tempDir, registryName)
-	for _, pkg := range packages {
-		if pkg.GitURL == "" {
-			t.Fatalf("Package %s has no GitURL; must be pre-initialized with setupPackageWithGit", pkg.Name)
-		}
-		addPackageToRegistry(t, tempDir, registryName, pkg.GitURL)
-	}
-	return registryDir
-}
-
-// setupReleaseTestEnv prepares a package and registry for release testing
-func setupReleaseTestEnv(t *testing.T, tempDir, registryName, packageName, initialVersion string) (string, string) {
-	t.Helper()
-
-	// Initialize package with specified version and Git remote
-	packageDir, gitURL := setupPackageWithGit(t, tempDir, packageName, initialVersion)
-
-	// Load the project's current state from Project.json
-	project := loadProjectFile(t, filepath.Join(packageDir, "Project.json"))
-
-	// Define test package with loaded project and Git URL
-	pkg := testProject{
-		Project: project,
-		GitURL:  gitURL,
-	}
-
-	// Register package in the registry
-	registryDir := setupRegistryWithPackages(t, tempDir, registryName, []testProject{pkg})
-
-	return packageDir, registryDir
-}
-
 func releasePackage(t *testing.T, packageDir, releaseArg string) (string, string) {
 	var args []string
 	switch releaseArg {
@@ -265,90 +225,12 @@ func loadProjectFile(t *testing.T, projectFile string) types.Project {
 	return project
 }
 
-// Helper function to add, commit, and push changes
-func gitAddCommitPush(t *testing.T, message string) {
-	if err := exec.Command("git", "add", ".").Run(); err != nil {
-		t.Fatalf("Failed to git add: %v", err)
-	}
-	if err := exec.Command("git", "commit", "-m", message).Run(); err != nil {
-		t.Fatalf("Failed to git commit: %v", err)
-	}
-	if err := exec.Command("git", "push", "origin", "main").Run(); err != nil {
-		t.Fatalf("Failed to git push: %v", err)
-	}
-}
-
-// Helper function for invalid package setup
-func gitInitAddCommit(t *testing.T, message string) {
-	if err := exec.Command("git", "init").Run(); err != nil {
-		t.Fatalf("Failed to git init: %v", err)
-	}
-	if err := exec.Command("git", "add", ".").Run(); err != nil {
-		t.Fatalf("Failed to git add: %v", err)
-	}
-	if err := exec.Command("git", "commit", "-m", message).Run(); err != nil {
-		t.Fatalf("Failed to git commit: %v", err)
-	}
-}
-
-func gitRemoteAddPush(t *testing.T, remoteURL string) {
-	if err := exec.Command("git", "remote", "add", "origin", remoteURL).Run(); err != nil {
-		t.Fatalf("Failed to add remote: %v", err)
-	}
-	if err := exec.Command("git", "push", "origin", "main").Run(); err != nil {
-		t.Fatalf("Failed to git push: %v", err)
-	}
-}
-
 /////////////////////// Check HELPER FUNCTIONS ///////////////////////
 
 func verifyProjectDependencies(t *testing.T, projectFile, packageName, expectedVersion string) {
 	project := loadProjectFile(t, projectFile)
 	if version, exists := project.Deps[packageName]; !exists || version != expectedVersion {
 		t.Errorf("Expected dependency %s:%s, got %v", packageName, expectedVersion, project.Deps)
-	}
-}
-
-// verifyVersionsJSON checks the versions.json file for expected versions
-func verifyVersionsJSON(t *testing.T, versionsFile string, expectedVersions []string) {
-	data, err := os.ReadFile(versionsFile)
-	if err != nil {
-		t.Fatalf("Failed to read versions.json: %v", err)
-	}
-	var versions []string
-	if err := json.Unmarshal(data, &versions); err != nil {
-		t.Fatalf("Failed to parse versions.json: %v", err)
-	}
-	if len(versions) != len(expectedVersions) {
-		t.Errorf("Expected %d versions, got %d: %v", len(expectedVersions), len(versions), versions)
-	}
-	for i, expected := range expectedVersions {
-		if i >= len(versions) || versions[i] != expected {
-			t.Errorf("Expected version %q at index %d, got %q", expected, i, versions[i])
-		}
-	}
-}
-
-// verifyPackageCloneExists ensures the package clone exists in the clones directory
-func verifyPackageCloneExists(t *testing.T, tempDir, packageUUID string) {
-	clonePath := filepath.Join(tempDir, ".cosm", "clones", packageUUID)
-	if _, err := os.Stat(clonePath); os.IsNotExist(err) {
-		t.Errorf("Package clone not found at %s", clonePath)
-	}
-}
-
-// verifySpecsJSON checks the specs.json file for a specific version
-func verifySpecsJSON(t *testing.T, specsFile, expectedVersion string) {
-	data, err := os.ReadFile(specsFile)
-	if err != nil {
-		t.Fatalf("Failed to read specs.json: %v", err)
-	}
-	var specs types.Specs
-	if err := json.Unmarshal(data, &specs); err != nil {
-		t.Fatalf("Failed to parse specs.json: %v", err)
-	}
-	if specs.Version != expectedVersion {
-		t.Errorf("Expected specs.json version %q, got %q", expectedVersion, specs.Version)
 	}
 }
 
@@ -587,4 +469,236 @@ func verifyRelease(t *testing.T, packageDir, registryDir, packageName, newVersio
 	verifyGitTag(t, packageDir, newVersion)
 	verifyRegistryUpdates(t, filepath.Join(registryDir, "M", packageName, "versions.json"), specs, newVersion, previousVersions)
 	verifySHA1Matches(t, packageDir, newVersion, specs)
+}
+
+// verifyVersionsJSON checks the versions.json file for expected versions
+func verifyVersionsJSON(t *testing.T, versionsFile string, expectedVersions []string) {
+	data, err := os.ReadFile(versionsFile)
+	if err != nil {
+		t.Fatalf("Failed to read versions.json: %v", err)
+	}
+	var versions []string
+	if err := json.Unmarshal(data, &versions); err != nil {
+		t.Fatalf("Failed to parse versions.json: %v", err)
+	}
+	if len(versions) != len(expectedVersions) {
+		t.Errorf("Expected %d versions, got %d: %v", len(expectedVersions), len(versions), versions)
+	}
+	for i, expected := range expectedVersions {
+		if i >= len(versions) || versions[i] != expected {
+			t.Errorf("Expected version %q at index %d, got %q", expected, i, versions[i])
+		}
+	}
+}
+
+// loadSpecs reads and parses specs.json for a package version
+func loadSpecs(t *testing.T, tempDir, registryName, packageName, version string) types.Specs {
+	t.Helper()
+	specsFile := filepath.Join(tempDir, ".cosm", "registries", registryName, strings.ToUpper(string(packageName[0])), packageName, version, "specs.json")
+	data, err := os.ReadFile(specsFile)
+	if err != nil {
+		t.Fatalf("Failed to read specs.json: %v", err)
+	}
+	var specs types.Specs
+	if err := json.Unmarshal(data, &specs); err != nil {
+		t.Fatalf("Failed to parse specs.json: %v", err)
+	}
+	return specs
+}
+
+// getCloneBranch retrieves the current branch of a Git clone
+func getCloneBranch(t *testing.T, cloneDir string) string {
+	t.Helper()
+	currentDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	if err := os.Chdir(cloneDir); err != nil {
+		t.Fatalf("Failed to change to clone dir %s: %v", cloneDir, err)
+	}
+	defer os.Chdir(currentDir)
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to get branch: %v", err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+// verifyCloneBranch checks if the clone is on the expected branch
+func verifyCloneBranch(t *testing.T, cloneDir, expectedBranch string) {
+	t.Helper()
+	currentBranch := getCloneBranch(t, cloneDir)
+	if currentBranch != expectedBranch {
+		t.Errorf("Expected clone branch %q, got %q", expectedBranch, currentBranch)
+	}
+}
+
+// verifyPackageDestination checks if the destination directory exists and contains expected files
+func verifyPackageDestination(t *testing.T, destPath string) {
+	t.Helper()
+	if _, err := os.Stat(destPath); os.IsNotExist(err) {
+		t.Errorf("Destination directory %s not created", destPath)
+	}
+	// Check for Project.json as a basic verification of copied content
+	projectFile := filepath.Join(destPath, "Project.json")
+	if _, err := os.Stat(projectFile); os.IsNotExist(err) {
+		t.Errorf("Expected Project.json in %s, not found", destPath)
+	}
+}
+
+// tagPackageVersion tags a specific version in the package's Git repository
+func tagPackageVersion(t *testing.T, packageDir, version string) {
+	t.Helper()
+	currentDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	if err := os.Chdir(packageDir); err != nil {
+		t.Fatalf("Failed to change to package dir %s: %v", packageDir, err)
+	}
+	defer os.Chdir(currentDir)
+
+	if err := exec.Command("git", "tag", version).Run(); err != nil {
+		t.Fatalf("Failed to tag version %s: %v", version, err)
+	}
+	if err := exec.Command("git", "push", "origin", version).Run(); err != nil {
+		t.Fatalf("Failed to push tag %s: %v", version, err)
+	}
+}
+
+// verifyRegistryPackage verifies that a package is correctly registered in the registry
+func verifyRegistryPackage(t *testing.T, registryDir, packageName, packageUUID, version, gitURL string) {
+	t.Helper()
+	// Verify registry.json
+	checkRegistryMetaFile(t, filepath.Join(registryDir, "registry.json"), types.Registry{
+		Name:     filepath.Base(registryDir),
+		Packages: map[string]string{packageName: packageUUID},
+	})
+
+	// Verify versions.json
+	versionsFile := filepath.Join(registryDir, strings.ToUpper(string(packageName[0])), packageName, "versions.json")
+	verifyVersionsJSON(t, versionsFile, []string{version})
+
+	// Verify specs.json
+	specsFile := filepath.Join(registryDir, strings.ToUpper(string(packageName[0])), packageName, version, "specs.json")
+	data, err := os.ReadFile(specsFile)
+	if err != nil {
+		t.Fatalf("Failed to read specs.json: %v", err)
+	}
+	var specs types.Specs
+	if err := json.Unmarshal(data, &specs); err != nil {
+		t.Fatalf("Failed to parse specs.json: %v", err)
+	}
+	if specs.Name != packageName {
+		t.Errorf("Expected specs.Name %q, got %q", packageName, specs.Name)
+	}
+	if specs.UUID != packageUUID {
+		t.Errorf("Expected specs.UUID %q, got %q", packageUUID, specs.UUID)
+	}
+	if specs.Version != version {
+		t.Errorf("Expected specs.Version %q, got %q", version, specs.Version)
+	}
+	if specs.GitURL != gitURL {
+		t.Errorf("Expected specs.GitURL %q, got %q", gitURL, specs.GitURL)
+	}
+	if specs.SHA1 == "" {
+		t.Errorf("Expected non-empty SHA1 in specs.json")
+	}
+}
+
+// verifyPackageCloneExists ensures the package clone exists in the clones directory
+func verifyPackageCloneExists(t *testing.T, tempDir, packageUUID string) {
+	clonePath := filepath.Join(tempDir, ".cosm", "clones", packageUUID)
+	if _, err := os.Stat(clonePath); os.IsNotExist(err) {
+		t.Errorf("Package clone not found at %s", clonePath)
+	}
+}
+
+// verifyRegistryDeleted verifies that a registry was deleted and removed from registries.json
+func verifyRegistryDeleted(t *testing.T, registriesDir, registryName string) {
+	t.Helper()
+	registryPath := filepath.Join(registriesDir, registryName)
+	if _, err := os.Stat(registryPath); !os.IsNotExist(err) {
+		t.Errorf("Registry directory %s was not deleted", registryPath)
+	}
+	data, err := os.ReadFile(filepath.Join(registriesDir, "registries.json"))
+	if err != nil {
+		t.Fatalf("Failed to read registries.json: %v", err)
+	}
+	var registryNames []string
+	if err := json.Unmarshal(data, &registryNames); err != nil {
+		t.Fatalf("Failed to parse registries.json: %v", err)
+	}
+	for _, name := range registryNames {
+		if name == registryName {
+			t.Errorf("Registry '%s' was not removed from registries.json", registryName)
+		}
+	}
+}
+
+// deleteRegistry deletes a registry programmatically
+func deleteRegistry(t *testing.T, tempDir, registryName string, force bool) {
+	t.Helper()
+	args := []string{"registry", "delete", registryName}
+	if force {
+		args = append(args, "--force")
+	}
+	cmd := exec.Command(binaryPath, args...)
+	cmd.Dir = tempDir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to delete registry '%s': %v\nStderr: %s", registryName, err, stderr.String())
+	}
+}
+
+// verifyRegistryCloned verifies that a registry was cloned and its metadata is correct
+func verifyRegistryCloned(t *testing.T, tempDir, registryDir, registryName string, packages map[string]string) {
+	t.Helper()
+	// Verify registry directory exists
+	if _, err := os.Stat(registryDir); os.IsNotExist(err) {
+		t.Errorf("Registry directory %s not created", registryDir)
+	}
+
+	// Verify registry.json
+	checkRegistryMetaFile(t, filepath.Join(registryDir, "registry.json"), types.Registry{
+		Name:     registryName,
+		Packages: packages,
+	})
+}
+
+// updateRemoteRegistry adds a new package to the remote registry repository
+func updateRemoteRegistry(t *testing.T, tempDir, registryDir, packageName, version, gitURL string) {
+	t.Helper()
+	// Clone the remote repository to a temporary directory
+	workDir := filepath.Join(tempDir, "work-"+packageName)
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatalf("Failed to create work dir %s: %v", workDir, err)
+	}
+	defer os.RemoveAll(workDir)
+
+	if err := exec.Command("git", "clone", gitURL, workDir).Run(); err != nil {
+		t.Fatalf("Failed to clone remote repository %s: %v", gitURL, err)
+	}
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("Failed to change to work dir %s: %v", workDir, err)
+	}
+
+	// Create and add a new package
+	packageDir, packageGitURL := setupPackageWithGit(t, tempDir, packageName, version)
+	tagPackageVersion(t, packageDir, version)
+	addPackageToRegistry(t, tempDir, filepath.Base(registryDir), packageGitURL)
+
+	// Commit and push changes to remote
+	if err := exec.Command("git", "add", ".").Run(); err != nil {
+		t.Fatalf("Failed to add changes: %v", err)
+	}
+	if err := exec.Command("git", "commit", "-m", fmt.Sprintf("Add package %s", packageName)).Run(); err != nil {
+		t.Fatalf("Failed to commit changes: %v", err)
+	}
+	if err := exec.Command("git", "push", "origin", "main").Run(); err != nil {
+		t.Fatalf("Failed to push changes to %s: %v", gitURL, err)
+	}
 }

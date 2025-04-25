@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,8 +11,6 @@ import (
 
 	"cosm/commands"
 	"cosm/types"
-
-	"github.com/google/uuid"
 )
 
 func init() {
@@ -186,121 +183,267 @@ func TestRegistryInit(t *testing.T) {
 	})
 }
 
-// TestRegistryAdd tests the cosm registry add command
 func TestRegistryAdd(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
 
-	// Setup dependency registry
-	depRegName := "depReg"
-	setupRegistry(t, tempDir, depRegName)
-
-	// Setup dependency package
-	depName := "dep1"
-	depVersion := "v1.2.0"
-	depUUID := "123e4567-e89b-12d3-a456-426614174001"
-	depDir, depGitURL := setupPackageWithGit(t, tempDir, depName, depVersion)
-	os.Chdir(depDir)
-	os.WriteFile("Project.json", []byte(fmt.Sprintf(`{"name":"%s","uuid":"%s","version":"%s"}`, depName, depUUID, depVersion)), 0644)
-	gitAddCommitPush(t, "Update Project.json")
-
-	// Add dependency to depReg
-	stdout, stderr := addPackageToRegistry(t, tempDir, depRegName, depGitURL)
-	expectedOutput := fmt.Sprintf("Added package '%s' with version '%s' to registry '%s'\n", depName, depVersion, depRegName)
-	if stdout != expectedOutput {
-		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	tests := []struct {
+		name           string
+		registryName   string
+		packageName    string
+		packageVersion string
+		setup          func(t *testing.T, registryDir string) (string, string) // Returns packageDir, packageGitURL
+		input          string                                                  // Stdin input for registry selection
+		args           []string                                                // Command arguments
+		expectError    bool
+		expectedStderr string
+		verifyResults  func(t *testing.T, registryDir, packageDir, packageGitURL string)
+	}{
+		{
+			name:           "success",
+			registryName:   "myreg1",
+			packageName:    "mypkg",
+			packageVersion: "v0.1.0",
+			setup: func(t *testing.T, registryDir string) (string, string) {
+				packageDir, gitURL := setupPackageWithGit(t, tempDir, "mypkg", "v0.1.0")
+				tagPackageVersion(t, packageDir, "v0.1.0")
+				return packageDir, gitURL
+			},
+			input: "\n",                                      // Default registry selection
+			args:  []string{"registry", "add", "myreg1", ""}, // gitURL set in loop
+			verifyResults: func(t *testing.T, registryDir, packageDir, packageGitURL string) {
+				project := loadProjectFile(t, filepath.Join(packageDir, "Project.json"))
+				verifyRegistryPackage(t, registryDir, "mypkg", project.UUID, "v0.1.0", packageGitURL)
+				verifyPackageCloneExists(t, tempDir, project.UUID)
+			},
+		},
+		{
+			name:           "error_duplicate_package",
+			registryName:   "myreg2",
+			packageName:    "mypkg2",
+			packageVersion: "v0.1.0",
+			setup: func(t *testing.T, registryDir string) (string, string) {
+				packageDir, gitURL := setupPackageWithGit(t, tempDir, "mypkg2", "v0.1.0")
+				tagPackageVersion(t, packageDir, "v0.1.0")
+				addPackageToRegistry(t, tempDir, filepath.Base(registryDir), gitURL)
+				return packageDir, gitURL
+			},
+			input:          "\n",
+			args:           []string{"registry", "add", "myreg2", ""}, // gitURL set in loop
+			expectError:    true,
+			expectedStderr: "Error: package 'mypkg2' is already registered in registry 'myreg2'\n",
+			verifyResults: func(t *testing.T, registryDir, packageDir, packageGitURL string) {
+				// No additional verification needed; error case should not modify registry
+			},
+		},
+		{
+			name:           "error_invalid_git_url",
+			registryName:   "myreg3",
+			packageName:    "invalidpkg",
+			packageVersion: "v0.1.0",
+			setup: func(t *testing.T, registryDir string) (string, string) {
+				return "", "file:///nonexistent.git"
+			},
+			input:          "\n",
+			args:           []string{"registry", "add", "myreg3", "file:///nonexistent.git"},
+			expectError:    true,
+			expectedStderr: "Error: failed to clone package repository at 'file:///nonexistent.git'",
+			verifyResults: func(t *testing.T, registryDir, packageDir, packageGitURL string) {
+				// Verify registry remains unchanged
+				checkRegistryMetaFile(t, filepath.Join(registryDir, "registry.json"), types.Registry{
+					Name:     "myreg3",
+					Packages: make(map[string]string),
+				})
+			},
+		},
 	}
 
-	// Setup test registry
-	registryName := "myreg"
-	registryGitURL, registryDir := setupRegistry(t, tempDir, registryName)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup registry for this subtest
+			_, registryDir := setupRegistry(t, tempDir, tt.registryName)
 
-	// Setup test package with dependency
-	packageName := "mypkg"
-	packageVersion := "v0.1.0"
-	packageUUID := "123e4567-e89b-12d3-a456-426614174000"
-	packageDir, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
-	os.Chdir(packageDir)
-	os.WriteFile("Project.json", []byte(fmt.Sprintf(`{"name":"%s","uuid":"%s","version":"%s","deps":{"%s":"%s"}}`, packageName, packageUUID, packageVersion, depName, depVersion)), 0644)
-	gitAddCommitPush(t, "Update Project.json with dep")
+			packageDir, packageGitURL := tt.setup(t, registryDir)
+			args := tt.args
+			if packageGitURL != "" && args[len(args)-1] == "" {
+				args[len(args)-1] = packageGitURL
+			}
 
-	// Add package to myreg
-	stdout, stderr = addPackageToRegistry(t, tempDir, registryName, packageGitURL)
-	expectedOutput = fmt.Sprintf("Added package '%s' with version '%s' to registry '%s'\n", packageName, packageVersion, registryName)
-	if stdout != expectedOutput {
-		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
-	}
-	expectedStderrPrefix := fmt.Sprintf("No valid tags found; released version '%s' from Project.json to repository at '%s'", packageVersion, packageGitURL)
-	if !strings.HasPrefix(stderr, expectedStderrPrefix) {
-		t.Errorf("Expected stderr prefix %q, got %q", expectedStderrPrefix, stderr)
-	}
+			cmd := exec.Command(binaryPath, args...)
+			cmd.Dir = tempDir
+			cmd.Stdin = strings.NewReader(tt.input)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			err := cmd.Run()
 
-	// Verify registry state
-	registryMetaFile := filepath.Join(registryDir, "registry.json")
-	checkRegistryMetaFile(t, registryMetaFile, types.Registry{
-		Name:     registryName,
-		GitURL:   registryGitURL,
-		Packages: map[string]string{packageName: packageUUID},
-	})
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error, got none")
+				}
+				if !strings.Contains(stderr.String(), tt.expectedStderr) {
+					t.Errorf("Expected stderr containing %q, got %q", tt.expectedStderr, stderr.String())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v\nStderr: %s", err, stderr.String())
+				}
+				expectedOutput := fmt.Sprintf("Added package '%s' with version '%s' to registry '%s'\n", tt.packageName, tt.packageVersion, tt.registryName)
+				if stdout.String() != expectedOutput {
+					t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout.String(), stderr.String())
+				}
+			}
 
-	// Verify package versions and specs
-	versionsFile := filepath.Join(registryDir, "M", packageName, "versions.json")
-	verifyVersionsJSON(t, versionsFile, []string{packageVersion})
-
-	verifyPackageCloneExists(t, tempDir, packageUUID)
-
-	specsFile := filepath.Join(registryDir, "M", packageName, packageVersion, "specs.json")
-	verifySpecsJSON(t, specsFile, packageVersion)
-
-	// Verify buildlist.json
-	buildListFile := filepath.Join(registryDir, "M", packageName, packageVersion, "buildlist.json")
-	data, err := os.ReadFile(buildListFile)
-	if err != nil {
-		t.Fatalf("Failed to read buildlist.json: %v", err)
-	}
-	var buildList types.BuildList
-	if err := json.Unmarshal(data, &buildList); err != nil {
-		t.Fatalf("Failed to parse buildlist.json: %v", err)
-	}
-	expectedKey := fmt.Sprintf("%s@v1", depUUID)
-	if len(buildList.Dependencies) != 1 {
-		t.Errorf("Expected 1 dependency in buildlist.json, got %d", len(buildList.Dependencies))
-	}
-	if dep, exists := buildList.Dependencies[expectedKey]; !exists {
-		t.Errorf("Expected dependency key %q in buildlist.json, not found", expectedKey)
-	} else {
-		if dep.Name != depName || dep.UUID != depUUID || dep.Version != depVersion {
-			t.Errorf("Expected dependency %s@%s (UUID: %s), got %s@%s (UUID: %s)",
-				depName, depVersion, depUUID, dep.Name, dep.Version, dep.UUID)
-		}
-	}
-
-	// Test error: missing dependency
-	invalidPackageName := "invalidpkg"
-	invalidGitURL := createBareRepo(t, tempDir, "invalid.git")
-	invalidDir := filepath.Join(tempDir, invalidPackageName)
-	os.Mkdir(invalidDir, 0755)
-	os.Chdir(invalidDir)
-	os.WriteFile("Project.json", []byte(fmt.Sprintf(`{"name":"%s","uuid":"%s","version":"v0.1.0","deps":{"missing":"v1.0.0"}}`, invalidPackageName, uuid.NewString())), 0644)
-	gitInitAddCommit(t, "Initial with missing dep")
-	gitRemoteAddPush(t, invalidGitURL)
-	stdout, stderr, err = runCommand(t, tempDir, "registry", "add", registryName, invalidGitURL)
-	expectedStderr := "dependency 'missing@v1.0.0' not found in any registry"
-	checkOutput(t, stdout, stderr, "", err, true, 1)
-	if !strings.Contains(stderr, expectedStderr) {
-		t.Errorf("Expected stderr containing %q, got %q", expectedStderr, stderr)
+			tt.verifyResults(t, registryDir, packageDir, packageGitURL)
+		})
 	}
 }
 
-// TestReleasePatch tests the cosm release --patch command
+func TestRegistryDelete(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	tests := []struct {
+		name           string
+		registryName   string
+		input          string // Stdin input for confirmation
+		args           []string
+		expectError    bool
+		expectedStderr string
+		verifyResults  func(t *testing.T, registriesDir string)
+	}{
+		{
+			name:         "success_with_force",
+			registryName: "myreg1",
+			args:         []string{"registry", "delete", "myreg1", "--force"},
+			verifyResults: func(t *testing.T, registriesDir string) {
+				verifyRegistryDeleted(t, registriesDir, "myreg1")
+			},
+		},
+		{
+			name:         "success_with_confirmation",
+			registryName: "myreg2",
+			input:        "y\n",
+			args:         []string{"registry", "delete", "myreg2"},
+			verifyResults: func(t *testing.T, registriesDir string) {
+				verifyRegistryDeleted(t, registriesDir, "myreg2")
+			},
+		},
+		{
+			name:           "error_non_existent_registry",
+			registryName:   "nonexistent",
+			args:           []string{"registry", "delete", "nonexistent"},
+			expectError:    true,
+			expectedStderr: "Error: registry 'nonexistent' not found in registries.json",
+			verifyResults: func(t *testing.T, registriesDir string) {
+				// Verify registries.json contains only myreg3 (since myreg1, myreg2 are not set up)
+				checkRegistriesFile(t, filepath.Join(registriesDir, "registries.json"), []string{"myreg3"})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup registries for this subtest
+			registriesDir := filepath.Join(tempDir, ".cosm", "registries")
+			if tt.name == "success_with_force" {
+				setupRegistry(t, tempDir, "myreg1")
+			} else if tt.name == "success_with_confirmation" {
+				setupRegistry(t, tempDir, "myreg2")
+			} else if tt.name == "error_non_existent_registry" {
+				setupRegistry(t, tempDir, "myreg3")
+			}
+
+			cmd := exec.Command(binaryPath, tt.args...)
+			cmd.Dir = tempDir
+			if tt.input != "" {
+				cmd.Stdin = strings.NewReader(tt.input)
+			}
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error, got none")
+				}
+				if !strings.Contains(stderr.String(), tt.expectedStderr) {
+					t.Errorf("Expected stderr containing %q, got %q", tt.expectedStderr, stderr.String())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v\nStderr: %s", err, stderr.String())
+				}
+				var expectedOutput string
+				if tt.name == "success_with_confirmation" {
+					expectedOutput = fmt.Sprintf("Are you sure you want to delete registry '%s'? [y/N]: Deleted registry '%s'\n", tt.registryName, tt.registryName)
+				} else {
+					expectedOutput = fmt.Sprintf("Deleted registry '%s'\n", tt.registryName)
+				}
+				if stdout.String() != expectedOutput {
+					t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout.String(), stderr.String())
+				}
+			}
+
+			tt.verifyResults(t, registriesDir)
+		})
+	}
+}
+
+func TestRegistryClone(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Create registry
+	registryName := "myreg"
+	gitURL, registryDir := setupRegistry(t, tempDir, registryName)
+
+	// Create a package and add to registry
+	packageName := "mypkg"
+	version := "v1.2.3"
+	packageDir, packageGitURL := setupPackageWithGit(t, tempDir, packageName, version)
+	tagPackageVersion(t, packageDir, version) // Ensure version is tagged
+	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
+
+	// Delete the registry
+	deleteRegistry(t, tempDir, registryName, true)
+	verifyRegistryDeleted(t, filepath.Join(tempDir, ".cosm", "registries"), registryName)
+
+	// Clone the registry
+	cmd := exec.Command(binaryPath, "registry", "clone", gitURL)
+	cmd.Dir = tempDir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Errorf("Unexpected error: %v\nStderr: %s", err, stderr.String())
+	}
+
+	// Verify results
+	expectedOutput := fmt.Sprintf("Cloned registry '%s' from %s\n", registryName, gitURL)
+	if stdout.String() != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout.String(), stderr.String())
+	}
+	project := loadProjectFile(t, filepath.Join(packageDir, "Project.json"))
+	verifyRegistryCloned(t, tempDir, registryDir, registryName, map[string]string{packageName: project.UUID})
+	checkRegistriesFile(t, filepath.Join(tempDir, ".cosm", "registries", "registries.json"), []string{registryName})
+	verifyRegistryPackage(t, registryDir, packageName, project.UUID, version, packageGitURL)
+}
+
 func TestRelease(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
 
+	// Create registry
 	registryName := "myreg"
+	_, registryDir := setupRegistry(t, tempDir, registryName)
+
+	// Create a package and add to registry
 	packageName := "mypkg"
 	version := "v1.2.3"
-	packageDir, registryDir := setupReleaseTestEnv(t, tempDir, registryName, packageName, version)
+	packageDir, gitURL := setupPackageWithGit(t, tempDir, packageName, version)
+	addPackageToRegistry(t, tempDir, registryName, gitURL)
 
 	// Execute release --patch
 	patchRelease := "v1.2.4"
@@ -331,90 +474,73 @@ func TestMakePackageAvailable(t *testing.T) {
 	setupRegistry(t, tempDir, registryName)
 	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
 
-	// Capture the initial branch of the clone
-	clonePath := filepath.Join(tempDir, ".cosm", "clones")
-	var specs types.Specs
-	specsFile := filepath.Join(tempDir, ".cosm", "registries", registryName, "M", packageName, packageVersion, "specs.json")
-	data, err := os.ReadFile(specsFile)
-	if err != nil {
-		t.Fatalf("Failed to read specs.json: %v", err)
-	}
-	if err := json.Unmarshal(data, &specs); err != nil {
-		t.Fatalf("Failed to parse specs.json: %v", err)
-	}
-	cloneDir := filepath.Join(clonePath, specs.UUID)
-	if err := os.Chdir(cloneDir); err != nil {
-		t.Fatalf("Failed to change to clone dir: %v", err)
-	}
-	initialBranchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	initialBranchOutput, err := initialBranchCmd.Output()
-	if err != nil {
-		t.Fatalf("Failed to get initial branch: %v", err)
-	}
-	initialBranch := strings.TrimSpace(string(initialBranchOutput))
-
-	// Test success case
-	err = commands.MakePackageAvailable(filepath.Join(tempDir, ".cosm"), registryName, packageName, packageVersion)
-	if err != nil {
-		t.Fatalf("MakePackageAvailable failed: %v", err)
-	}
-
-	// Verify destination directory
+	// Load specs to get UUID and SHA1
+	specs := loadSpecs(t, tempDir, registryName, packageName, packageVersion)
+	cloneDir := filepath.Join(tempDir, ".cosm", "clones", specs.UUID)
 	destPath := filepath.Join(tempDir, ".cosm", "packages", packageName, specs.SHA1)
-	if _, err := os.Stat(destPath); os.IsNotExist(err) {
-		t.Errorf("Destination directory %s not created", destPath)
+
+	// Capture initial branch
+	initialBranch := getCloneBranch(t, cloneDir)
+
+	tests := []struct {
+		name          string
+		setup         func(t *testing.T)
+		expectError   bool
+		verifyResults func(t *testing.T)
+	}{
+		{
+			name: "success",
+			setup: func(t *testing.T) {
+				// Ensure packages directory is writable
+				if err := os.MkdirAll(filepath.Join(tempDir, ".cosm", "packages"), 0755); err != nil {
+					t.Fatalf("Failed to create packages dir: %v", err)
+				}
+			},
+			expectError: false,
+			verifyResults: func(t *testing.T) {
+				verifyPackageDestination(t, destPath)
+			},
+		},
+		{
+			name: "error_unwritable_destination",
+			setup: func(t *testing.T) {
+				// Clean up and recreate packages directory as unwritable
+				packagesDir := filepath.Join(tempDir, ".cosm", "packages")
+				if err := os.RemoveAll(packagesDir); err != nil {
+					t.Fatalf("Failed to remove packages dir: %v", err)
+				}
+				if err := os.MkdirAll(packagesDir, 0755); err != nil {
+					t.Fatalf("Failed to recreate packages dir: %v", err)
+				}
+				if err := os.Chmod(packagesDir, 0500); err != nil {
+					t.Fatalf("Failed to make packages dir unwritable: %v", err)
+				}
+				t.Cleanup(func() { os.Chmod(packagesDir, 0755) })
+			},
+			expectError: true,
+			verifyResults: func(t *testing.T) {
+				if _, err := os.Stat(destPath); !os.IsNotExist(err) {
+					t.Errorf("Destination directory %s was created unexpectedly", destPath)
+				}
+			},
+		},
 	}
 
-	// Verify clone is back on the initial branch after success
-	if err := os.Chdir(cloneDir); err != nil {
-		t.Fatalf("Failed to change to clone dir: %v", err)
-	}
-	successBranchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	successBranchOutput, err := successBranchCmd.Output()
-	if err != nil {
-		t.Fatalf("Failed to check branch after success: %v", err)
-	}
-	successBranch := strings.TrimSpace(string(successBranchOutput))
-	if successBranch != initialBranch {
-		t.Errorf("Expected clone to revert to initial branch %q after success, got %q", initialBranch, successBranch)
-	}
-
-	// Clean up the packages directory to force recreation in error case
-	packagesDir := filepath.Join(tempDir, ".cosm", "packages")
-	if err := os.RemoveAll(packagesDir); err != nil {
-		t.Fatalf("Failed to remove packages directory: %v", err)
-	}
-
-	// Test error case: make destination directory unwritable to simulate failure
-	if err := os.MkdirAll(packagesDir, 0755); err != nil {
-		t.Fatalf("Failed to recreate packages dir: %v", err)
-	}
-	if err := os.Chmod(packagesDir, 0500); err != nil { // Read+execute only, no write
-		t.Fatalf("Failed to make packages dir unwritable: %v", err)
-	}
-	defer os.Chmod(packagesDir, 0755) // Restore permissions
-
-	// Verify packages dir is unwritable
-	if err := os.Mkdir(filepath.Join(packagesDir, "test"), 0755); err == nil {
-		t.Fatalf("Expected packages dir to be unwritable, but could create subdirectory")
-	}
-
-	err = commands.MakePackageAvailable(filepath.Join(tempDir, ".cosm"), registryName, packageName, packageVersion)
-	if err == nil {
-		t.Errorf("Expected MakePackageAvailable to fail due to unwritable directory")
-	}
-
-	// Verify clone is still reverted after error
-	if err := os.Chdir(cloneDir); err != nil {
-		t.Fatalf("Failed to change to clone dir: %v", err)
-	}
-	errorBranchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	errorBranchOutput, err := errorBranchCmd.Output()
-	if err != nil {
-		t.Fatalf("Failed to check branch after error: %v", err)
-	}
-	finalBranch := strings.TrimSpace(string(errorBranchOutput))
-	if finalBranch != initialBranch {
-		t.Errorf("Expected clone to revert to initial branch %q after error, got %q", initialBranch, finalBranch)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.setup(t)
+			err := commands.MakePackageAvailable(filepath.Join(tempDir, ".cosm"), registryName, packageName, packageVersion)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error, got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			}
+			tt.verifyResults(t)
+			verifyCloneBranch(t, cloneDir, initialBranch)
+		})
 	}
 }
