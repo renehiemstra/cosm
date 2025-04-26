@@ -68,7 +68,6 @@ func TestInit(t *testing.T) {
 	initPackage(t, tempDir, packageName2, "v1.0.0")
 }
 
-// TestInitDuplicate tests initializing a project when Project.json already exists
 func TestInitDuplicate(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
@@ -103,7 +102,6 @@ func TestInitDuplicate(t *testing.T) {
 	}
 }
 
-// TestAddDependency tests the cosm add command
 func TestAddDependency(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
@@ -130,6 +128,42 @@ func TestAddDependency(t *testing.T) {
 
 	// Verify dependency in Project.json
 	verifyProjectDependencies(t, filepath.Join(projectDir, "Project.json"), packageName, packageVersion)
+}
+
+func TestRmDependency(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Setup registry and package
+	registryName := "myreg"
+	setupRegistry(t, tempDir, registryName)
+	packageName := "mypkg"
+	packageVersion := "v0.1.0"
+	_, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
+	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
+
+	// Initialize project and add dependency
+	projectDir := initPackage(t, tempDir, "myproject")
+	addDependencyToProject(t, projectDir, packageName, packageVersion)
+
+	// Remove dependency
+	_, stderr := removeDependencyFromProject(t, projectDir, packageName)
+
+	// Verify dependency is removed
+	project := loadProjectFile(t, filepath.Join(projectDir, "Project.json"))
+	if _, exists := project.Deps[packageName]; exists {
+		t.Errorf("Dependency '%s' still exists in Project.json", packageName)
+	}
+
+	// Test error: remove non-existent dependency
+	_, stderr, err := runCommand(t, projectDir, "rm", "nonexistent")
+	if err == nil {
+		t.Errorf("Expected error when removing non-existent dependency, got none")
+	}
+	expectedStderr := fmt.Sprintf("Error: dependency 'nonexistent' not found in project\n")
+	if stderr != expectedStderr {
+		t.Errorf("Expected stderr %q, got %q", expectedStderr, stderr)
+	}
 }
 
 func TestRegistryStatus(t *testing.T) {
@@ -460,6 +494,46 @@ func TestRelease(t *testing.T) {
 	// Execute custom release
 	customRelease := "v3.1.2"
 	executeAndVerifyRelease(t, registryDir, packageDir, packageName, []string{version, patchRelease, minorRelease, majorRelease}, customRelease, customRelease)
+}
+
+func TestRegistryRm(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Create registry
+	registryName := "myreg"
+	_, registryDir := setupRegistry(t, tempDir, registryName)
+
+	// Create a package and add to registry
+	packageName := "mypkg"
+	version := "v1.2.3"
+	packageDir, gitURL := setupPackageWithGit(t, tempDir, packageName, version)
+	addPackageToRegistry(t, tempDir, registryName, gitURL)
+
+	// Execute release --patch
+	patchRelease := "v1.2.4"
+	executeAndVerifyRelease(t, registryDir, packageDir, packageName, []string{version}, patchRelease, "--patch")
+
+	// First remove patch release
+	removeFromRegistry(t, tempDir, registryName, packageName, patchRelease)
+
+	// Check that package version is successfully removed
+	verifyPackageRemoved(t, registryDir, packageName, patchRelease)
+	// Verify package still exists with original version
+	project := loadProjectFile(t, filepath.Join(packageDir, "Project.json"))
+	verifyRegistryPackage(t, registryDir, packageName, project.UUID, version, gitURL)
+	verifyRemoteUpdated(t, tempDir, registryDir, fmt.Sprintf("Removed version '%s' of package '%s'", patchRelease, packageName))
+
+	// Now remove the entire package
+	removeFromRegistry(t, tempDir, registryName, packageName, "")
+
+	// Check that package is completely removed
+	verifyPackageRemoved(t, registryDir, packageName, "")
+	checkRegistryMetaFile(t, filepath.Join(registryDir, "registry.json"), types.Registry{
+		Name:     registryName,
+		Packages: make(map[string]string),
+	})
+	verifyRemoteUpdated(t, tempDir, registryDir, fmt.Sprintf("Removed package '%s'", packageName))
 }
 
 func TestMakePackageAvailable(t *testing.T) {

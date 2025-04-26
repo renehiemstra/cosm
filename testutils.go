@@ -124,6 +124,20 @@ func addDependencyToProject(t *testing.T, projectDir, packageName, version strin
 	return stdout.String(), stderr.String()
 }
 
+// removeDependencyFromProject removes a dependency from a project using cosm rm and verifies the output
+func removeDependencyFromProject(t *testing.T, projectDir, packageName string) (stdout, stderr string) {
+	t.Helper()
+	stdout, stderr, err := runCommand(t, projectDir, "rm", packageName)
+	expectedOutput := fmt.Sprintf("Removed dependency '%s' from project\n", packageName)
+	if err != nil {
+		t.Errorf("Failed to remove dependency '%s': %v\nStderr: %s", packageName, err, stderr)
+	}
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+	return stdout, stderr
+}
+
 // setupTestEnv sets up a temporary environment with a Git config
 func setupTestEnv(t *testing.T) (tempDir string, cleanup func()) {
 	tempDir = t.TempDir()
@@ -224,6 +238,32 @@ func loadProjectFile(t *testing.T, projectFile string) types.Project {
 		project.Deps = make(map[string]string)
 	}
 	return project
+}
+
+// removeFromRegistry executes the cosm registry rm command and verifies its output
+func removeFromRegistry(t *testing.T, dir, registryName, packageName string, version string) (stdout, stderr string) {
+	t.Helper()
+	if version == "" {
+		stdout, stderr, err := runCommand(t, dir, "registry", "rm", registryName, packageName, "--force")
+		expectedOutput := fmt.Sprintf("Removed package '%s' from registry '%s'\n", packageName, registryName)
+		if err != nil {
+			t.Errorf("Failed to remove package %s: %v\nStderr: %s", packageName, err, stderr)
+		}
+		if stdout != expectedOutput {
+			t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+		}
+		return stdout, stderr
+	} else {
+		stdout, stderr, err := runCommand(t, dir, "registry", "rm", registryName, packageName, version, "--force")
+		expectedOutput := fmt.Sprintf("Removed version '%s' of package '%s' from registry '%s'\n", version, packageName, registryName)
+		if err != nil {
+			t.Errorf("Failed to remove version %s: %v\nStderr: %s", version, err, stderr)
+		}
+		if stdout != expectedOutput {
+			t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+		}
+		return stdout, stderr
+	}
 }
 
 /////////////////////// Check HELPER FUNCTIONS ///////////////////////
@@ -670,40 +710,6 @@ func verifyRegistryCloned(t *testing.T, tempDir, registryDir, registryName strin
 	})
 }
 
-// updateRemoteRegistry adds a new package to the remote registry repository
-func updateRemoteRegistry(t *testing.T, tempDir, registryDir, packageName, version, gitURL string) {
-	t.Helper()
-	// Clone the remote repository to a temporary directory
-	workDir := filepath.Join(tempDir, "work-"+packageName)
-	if err := os.MkdirAll(workDir, 0755); err != nil {
-		t.Fatalf("Failed to create work dir %s: %v", workDir, err)
-	}
-	defer os.RemoveAll(workDir)
-
-	if err := exec.Command("git", "clone", gitURL, workDir).Run(); err != nil {
-		t.Fatalf("Failed to clone remote repository %s: %v", gitURL, err)
-	}
-	if err := os.Chdir(workDir); err != nil {
-		t.Fatalf("Failed to change to work dir %s: %v", workDir, err)
-	}
-
-	// Create and add a new package
-	packageDir, packageGitURL := setupPackageWithGit(t, tempDir, packageName, version)
-	tagPackageVersion(t, packageDir, version)
-	addPackageToRegistry(t, tempDir, filepath.Base(registryDir), packageGitURL)
-
-	// Commit and push changes to remote
-	if err := exec.Command("git", "add", ".").Run(); err != nil {
-		t.Fatalf("Failed to add changes: %v", err)
-	}
-	if err := exec.Command("git", "commit", "-m", fmt.Sprintf("Add package %s", packageName)).Run(); err != nil {
-		t.Fatalf("Failed to commit changes: %v", err)
-	}
-	if err := exec.Command("git", "push", "origin", "main").Run(); err != nil {
-		t.Fatalf("Failed to push changes to %s: %v", gitURL, err)
-	}
-}
-
 func verifyPackageRemoved(t *testing.T, registryDir, packageName, version string) {
 	t.Helper()
 	// Check registry.json
@@ -746,7 +752,6 @@ func verifyPackageRemoved(t *testing.T, registryDir, packageName, version string
 	}
 }
 
-// verifyRemoteUpdated verifies that the remote repository was updated with the expected commit message
 func verifyRemoteUpdated(t *testing.T, tempDir, registryDir, expectedCommitMsg string) {
 	t.Helper()
 	// Change to the registry's local repository

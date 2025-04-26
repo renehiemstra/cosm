@@ -98,17 +98,19 @@ func main() {
 	}
 
 	var rmCmd = &cobra.Command{
-		Use:   "rm [name]",
-		Short: "Remove a dependency from the project",
-		Args:  cobra.ExactArgs(1),
-		Run:   commands.Rm,
+		Use:          "rm [name]",
+		Short:        "Remove a dependency from the project",
+		Args:         cobra.ExactArgs(1),
+		RunE:         commands.Rm,
+		SilenceUsage: true, // Prevent usage output in stderr
 	}
 
 	var releaseCmd = &cobra.Command{
-		Use:   "release [v<version>]",
-		Short: "Update the project version and publish a release",
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  commands.Release,
+		Use:          "release [v<version>]",
+		Short:        "Update the project version and publish a release",
+		Args:         cobra.MaximumNArgs(1),
+		RunE:         commands.Release,
+		SilenceUsage: true, // Prevent usage output in stderr
 	}
 	releaseCmd.Flags().Bool("patch", false, "Increment the patch version")
 	releaseCmd.Flags().Bool("minor", false, "Increment the minor version")
