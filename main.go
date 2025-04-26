@@ -194,17 +194,19 @@ func main() {
 	registryUpdateCmd.Flags().Bool("all", false, "Update all registries")
 
 	var registryAddCmd = &cobra.Command{
-		Use:   "add [registry-name] [giturl]",
-		Short: "Register a package version to a registry",
-		Args:  cobra.ExactArgs(2),
-		RunE:  commands.RegistryAdd,
+		Use:          "add [registry-name] [giturl]",
+		Short:        "Register a package version to a registry",
+		Args:         cobra.ExactArgs(2),
+		RunE:         commands.RegistryAdd,
+		SilenceUsage: true, // Prevent usage output in stderr
 	}
 
 	var registryRmCmd = &cobra.Command{
-		Use:   "rm [registry-name] [package-name] [v<version>]",
-		Short: "Remove a package or version from a registry",
-		Args:  cobra.RangeArgs(2, 3),
-		Run:   commands.RegistryRm,
+		Use:          "rm [registry-name] [package-name] [v<version>]",
+		Short:        "Remove a package or version from a registry",
+		Args:         cobra.RangeArgs(2, 3),
+		RunE:         commands.RegistryRm,
+		SilenceUsage: true, // Prevent usage output in stderr
 	}
 	registryRmCmd.Flags().BoolP("force", "f", false, "Force removal of the package or version")
 

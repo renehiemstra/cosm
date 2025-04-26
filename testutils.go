@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"cosm/commands"
 	"cosm/types"
 
 	"github.com/google/uuid"
@@ -700,5 +701,67 @@ func updateRemoteRegistry(t *testing.T, tempDir, registryDir, packageName, versi
 	}
 	if err := exec.Command("git", "push", "origin", "main").Run(); err != nil {
 		t.Fatalf("Failed to push changes to %s: %v", gitURL, err)
+	}
+}
+
+func verifyPackageRemoved(t *testing.T, registryDir, packageName, version string) {
+	t.Helper()
+	// Check registry.json
+	registry, _, err := commands.LoadRegistryMetadata(filepath.Dir(registryDir), filepath.Base(registryDir))
+	if err != nil {
+		t.Fatalf("Failed to load registry metadata: %v", err)
+	}
+	if _, exists := registry.Packages[packageName]; version == "" && exists {
+		t.Errorf("Package '%s' still exists in registry.json", packageName)
+	}
+
+	// Check package directory
+	packageFirstLetter := strings.ToUpper(string(packageName[0]))
+	packageDir := filepath.Join(registryDir, packageFirstLetter, packageName)
+	if version == "" {
+		if _, err := os.Stat(packageDir); !os.IsNotExist(err) {
+			t.Errorf("Package directory '%s' still exists", packageDir)
+		}
+		return
+	}
+
+	// Check version-specific removal
+	versionsFile := filepath.Join(packageDir, "versions.json")
+	data, err := os.ReadFile(versionsFile)
+	if err != nil {
+		t.Fatalf("Failed to read versions.json: %v", err)
+	}
+	var versions []string
+	if err := json.Unmarshal(data, &versions); err != nil {
+		t.Fatalf("Failed to parse versions.json: %v", err)
+	}
+	for _, v := range versions {
+		if v == version {
+			t.Errorf("Version '%s' still exists in versions.json for package '%s'", version, packageName)
+		}
+	}
+	versionDir := filepath.Join(packageDir, version)
+	if _, err := os.Stat(versionDir); !os.IsNotExist(err) {
+		t.Errorf("Version directory '%s' still exists for package '%s'", versionDir, packageName)
+	}
+}
+
+// verifyRemoteUpdated verifies that the remote repository was updated with the expected commit message
+func verifyRemoteUpdated(t *testing.T, tempDir, registryDir, expectedCommitMsg string) {
+	t.Helper()
+	// Change to the registry's local repository
+	if err := os.Chdir(registryDir); err != nil {
+		t.Fatalf("Failed to change to registry directory %s: %v", registryDir, err)
+	}
+
+	// Check the latest commit message
+	logCmd := exec.Command("git", "log", "-1", "--pretty=%B")
+	logOutput, err := logCmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to get latest commit message: %v", err)
+	}
+	commitMsg := strings.TrimSpace(string(logOutput))
+	if commitMsg != expectedCommitMsg {
+		t.Errorf("Expected commit message %q, got %q", expectedCommitMsg, commitMsg)
 	}
 }

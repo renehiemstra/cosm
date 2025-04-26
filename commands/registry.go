@@ -141,6 +141,62 @@ func RegistryAdd(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// RegistryRm removes a package or a specific version from a registry
+func RegistryRm(cmd *cobra.Command, args []string) error {
+	registryName, packageName, version, err := validateRmArgs(args)
+	if err != nil {
+		return err
+	}
+
+	cosmDir, err := getCosmDir()
+	if err != nil {
+		return err
+	}
+	registriesDir := setupRegistriesDir(cosmDir)
+
+	// Load registry metadata
+	registry, registryMetaFile, err := LoadRegistryMetadata(registriesDir, registryName)
+	if err != nil {
+		return err
+	}
+
+	// Check if package exists
+	if _, exists := registry.Packages[packageName]; !exists {
+		return fmt.Errorf("package '%s' not found in registry '%s'", packageName, registryName)
+	}
+
+	// Confirm removal
+	force, _ := cmd.Flags().GetBool("force")
+	if !force {
+		if err := confirmRemoval(registryName, packageName, version); err != nil {
+			return err
+		}
+	}
+
+	// Remove package or version
+	packageDir := filepath.Join(registriesDir, registryName, strings.ToUpper(string(packageName[0])), packageName)
+	if err := removePackageVersion(registriesDir, registryName, packageName, packageDir, version, &registry); err != nil {
+		return err
+	}
+
+	// Update registry.json
+	if err := updateRegistryMetadata(registry, registryMetaFile, registryName); err != nil {
+		return err
+	}
+
+	// Commit and push changes to remote
+	if err := commitAndPushRemoval(registriesDir, registryName, packageName, version); err != nil {
+		return err
+	}
+
+	if version != "" {
+		fmt.Printf("Removed version '%s' of package '%s' from registry '%s'\n", version, packageName, registryName)
+	} else {
+		fmt.Printf("Removed package '%s' from registry '%s'\n", packageName, registryName)
+	}
+	return nil
+}
+
 // RegistryDelete deletes a registry from the local system
 func RegistryDelete(cmd *cobra.Command, args []string) error {
 	registryName, err := validateStatusArgs(args) // Reusing validateStatusArgs for single argument check
@@ -1088,5 +1144,142 @@ func updateSingleRegistry(registriesDir, registryName string) error {
 	return nil
 }
 
-func RegistryRm(cmd *cobra.Command, args []string) {
+// validateRmArgs validates the arguments for RegistryRm
+func validateRmArgs(args []string) (registryName, packageName, version string, err error) {
+	if len(args) < 2 || len(args) > 3 {
+		return "", "", "", fmt.Errorf("expected 2 or 3 arguments (e.g., cosm registry rm <registry_name> <package_name> [v<version>] [--force])")
+	}
+	registryName = args[0]
+	packageName = args[1]
+	if len(args) == 3 {
+		version = args[2]
+		if !strings.HasPrefix(version, "v") {
+			return "", "", "", fmt.Errorf("version '%s' must start with 'v'", version)
+		}
+	}
+	return registryName, packageName, version, nil
+}
+
+// confirmRemoval prompts the user for confirmation if --force is not set
+func confirmRemoval(registryName, packageName, version string) error {
+	prompt := fmt.Sprintf("Are you sure you want to remove package '%s' from registry '%s'?", packageName, registryName)
+	if version != "" {
+		prompt = fmt.Sprintf("Are you sure you want to remove version '%s' of package '%s' from registry '%s'?", version, packageName, registryName)
+	}
+	fmt.Printf("%s [y/N]: ", prompt)
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	response := strings.TrimSpace(strings.ToLower(scanner.Text()))
+	if response != "y" && response != "yes" {
+		fmt.Println("Package removal cancelled.")
+		return fmt.Errorf("operation cancelled by user")
+	}
+	return nil
+}
+
+// removePackageVersion removes a specific version or entire package from the registry
+func removePackageVersion(registriesDir, registryName, packageName, packageDir, version string, registry *types.Registry) error {
+	if version != "" {
+		versionsFile := filepath.Join(packageDir, "versions.json")
+		var versions []string
+		if data, err := os.ReadFile(versionsFile); err == nil {
+			if err := json.Unmarshal(data, &versions); err != nil {
+				return fmt.Errorf("failed to parse versions.json for package '%s': %v", packageName, err)
+			}
+		} else {
+			return fmt.Errorf("versions.json not found for package '%s' in registry '%s'", packageName, registryName)
+		}
+
+		// Check if version exists
+		var updatedVersions []string
+		found := false
+		for _, v := range versions {
+			if v == version {
+				found = true
+				continue
+			}
+			updatedVersions = append(updatedVersions, v)
+		}
+		if !found {
+			return fmt.Errorf("version '%s' not found for package '%s' in registry '%s'", version, packageName, registryName)
+		}
+
+		// Remove version directory
+		versionDir := filepath.Join(packageDir, version)
+		if err := os.RemoveAll(versionDir); err != nil {
+			return fmt.Errorf("failed to remove version directory '%s': %v", versionDir, err)
+		}
+
+		// Update versions.json
+		data, err := json.MarshalIndent(updatedVersions, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal versions.json for package '%s': %v", packageName, err)
+		}
+		if err := os.WriteFile(versionsFile, data, 0644); err != nil {
+			return fmt.Errorf("failed to write versions.json for package '%s': %v", packageName, err)
+		}
+
+		// If no versions remain, remove the entire package
+		if len(updatedVersions) == 0 {
+			delete(registry.Packages, packageName)
+			if err := os.RemoveAll(packageDir); err != nil {
+				return fmt.Errorf("failed to remove package directory '%s': %v", packageDir, err)
+			}
+		}
+	} else {
+		// Remove entire package
+		delete(registry.Packages, packageName)
+		if err := os.RemoveAll(packageDir); err != nil {
+			return fmt.Errorf("failed to remove package directory '%s': %v", packageDir, err)
+		}
+	}
+	return nil
+}
+
+// updateRegistryMetadata updates the registry.json file with the modified registry data
+func updateRegistryMetadata(registry types.Registry, registryMetaFile, registryName string) error {
+	data, err := json.MarshalIndent(registry, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal registry.json for '%s': %v", registryName, err)
+	}
+	if err := os.WriteFile(registryMetaFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write registry.json for '%s': %v", registryName, err)
+	}
+	return nil
+}
+
+// commitAndPushRemoval commits and pushes the removal changes to the remote repository
+func commitAndPushRemoval(registriesDir, registryName, packageName, version string) error {
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %v", err)
+	}
+	registryPath := filepath.Join(registriesDir, registryName)
+	if err := os.Chdir(registryPath); err != nil {
+		cleanupCommit(currentDir)
+		return fmt.Errorf("failed to change to registry directory '%s': %v", registryPath, err)
+	}
+	addCmd := exec.Command("git", "add", ".")
+	if addOutput, err := addCmd.CombinedOutput(); err != nil {
+		cleanupCommit(currentDir)
+		return fmt.Errorf("failed to stage registry changes: %v\nOutput: %s", err, addOutput)
+	}
+	commitMsg := fmt.Sprintf("Removed package '%s'", packageName)
+	if version != "" {
+		commitMsg = fmt.Sprintf("Removed version '%s' of package '%s'", version, packageName)
+	}
+	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
+	if commitOutput, err := commitCmd.CombinedOutput(); err != nil {
+		cleanupCommit(currentDir)
+		return fmt.Errorf("failed to commit registry changes: %v\nOutput: %s", err, commitOutput)
+	}
+	pushCmd := exec.Command("git", "push", "origin", "main")
+	if pushOutput, err := pushCmd.CombinedOutput(); err != nil {
+		cleanupCommit(currentDir)
+		return fmt.Errorf("failed to push registry changes: %v\nOutput: %s", err, pushOutput)
+	}
+	if err := restoreCommitDir(currentDir); err != nil {
+		return err
+	}
+	return nil
 }
