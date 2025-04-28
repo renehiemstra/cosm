@@ -102,70 +102,6 @@ func TestInitDuplicate(t *testing.T) {
 	}
 }
 
-func TestAddDependency(t *testing.T) {
-	tempDir, cleanup := setupTestEnv(t)
-	defer cleanup()
-
-	// Setup registry
-	registryName := "myreg"
-	setupRegistry(t, tempDir, registryName)
-
-	// Setup package to be added as a dependency
-	packageName := "mypkg"
-	packageVersion := "v0.1.0"
-	_, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
-	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
-
-	// Initialize project
-	projectDir := initPackage(t, tempDir, "myproject")
-
-	// Add dependency to project
-	stdout, stderr := addDependencyToProject(t, projectDir, packageName, packageVersion)
-	expectedOutput := fmt.Sprintf("Added dependency '%s' %s from registry '%s' to project\n", packageName, packageVersion, registryName)
-	if stdout != expectedOutput {
-		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
-	}
-
-	// Verify dependency in Project.json
-	verifyProjectDependencies(t, filepath.Join(projectDir, "Project.json"), packageName, packageVersion)
-}
-
-func TestRmDependency(t *testing.T) {
-	tempDir, cleanup := setupTestEnv(t)
-	defer cleanup()
-
-	// Setup registry and package
-	registryName := "myreg"
-	setupRegistry(t, tempDir, registryName)
-	packageName := "mypkg"
-	packageVersion := "v0.1.0"
-	_, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
-	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
-
-	// Initialize project and add dependency
-	projectDir := initPackage(t, tempDir, "myproject")
-	addDependencyToProject(t, projectDir, packageName, packageVersion)
-
-	// Remove dependency
-	_, stderr := removeDependencyFromProject(t, projectDir, packageName)
-
-	// Verify dependency is removed
-	project := loadProjectFile(t, filepath.Join(projectDir, "Project.json"))
-	if _, exists := project.Deps[packageName]; exists {
-		t.Errorf("Dependency '%s' still exists in Project.json", packageName)
-	}
-
-	// Test error: remove non-existent dependency
-	_, stderr, err := runCommand(t, projectDir, "rm", "nonexistent")
-	if err == nil {
-		t.Errorf("Expected error when removing non-existent dependency, got none")
-	}
-	expectedStderr := fmt.Sprintf("Error: dependency 'nonexistent' not found in project\n")
-	if stderr != expectedStderr {
-		t.Errorf("Expected stderr %q, got %q", expectedStderr, stderr)
-	}
-}
-
 func TestRegistryStatus(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
@@ -213,124 +149,8 @@ func TestRegistryInit(t *testing.T) {
 	checkRegistryMetaFile(t, registryMetaFile, types.Registry{
 		Name:     registryName,
 		GitURL:   gitURL,
-		Packages: make(map[string]string),
+		Packages: make(map[string]types.PackageInfo),
 	})
-}
-
-func TestRegistryAdd(t *testing.T) {
-	tempDir, cleanup := setupTestEnv(t)
-	defer cleanup()
-
-	tests := []struct {
-		name           string
-		registryName   string
-		packageName    string
-		packageVersion string
-		setup          func(t *testing.T, registryDir string) (string, string) // Returns packageDir, packageGitURL
-		input          string                                                  // Stdin input for registry selection
-		args           []string                                                // Command arguments
-		expectError    bool
-		expectedStderr string
-		verifyResults  func(t *testing.T, registryDir, packageDir, packageGitURL string)
-	}{
-		{
-			name:           "success",
-			registryName:   "myreg1",
-			packageName:    "mypkg",
-			packageVersion: "v0.1.0",
-			setup: func(t *testing.T, registryDir string) (string, string) {
-				packageDir, gitURL := setupPackageWithGit(t, tempDir, "mypkg", "v0.1.0")
-				tagPackageVersion(t, packageDir, "v0.1.0")
-				return packageDir, gitURL
-			},
-			input: "\n",                                      // Default registry selection
-			args:  []string{"registry", "add", "myreg1", ""}, // gitURL set in loop
-			verifyResults: func(t *testing.T, registryDir, packageDir, packageGitURL string) {
-				project := loadProjectFile(t, filepath.Join(packageDir, "Project.json"))
-				verifyRegistryPackage(t, registryDir, "mypkg", project.UUID, "v0.1.0", packageGitURL)
-				verifyPackageCloneExists(t, tempDir, project.UUID)
-			},
-		},
-		{
-			name:           "error_duplicate_package",
-			registryName:   "myreg2",
-			packageName:    "mypkg2",
-			packageVersion: "v0.1.0",
-			setup: func(t *testing.T, registryDir string) (string, string) {
-				packageDir, gitURL := setupPackageWithGit(t, tempDir, "mypkg2", "v0.1.0")
-				tagPackageVersion(t, packageDir, "v0.1.0")
-				addPackageToRegistry(t, tempDir, filepath.Base(registryDir), gitURL)
-				return packageDir, gitURL
-			},
-			input:          "\n",
-			args:           []string{"registry", "add", "myreg2", ""}, // gitURL set in loop
-			expectError:    true,
-			expectedStderr: "Error: package 'mypkg2' is already registered in registry 'myreg2'\n",
-			verifyResults: func(t *testing.T, registryDir, packageDir, packageGitURL string) {
-				// No additional verification needed; error case should not modify registry
-			},
-		},
-		{
-			name:           "error_invalid_git_url",
-			registryName:   "myreg3",
-			packageName:    "invalidpkg",
-			packageVersion: "v0.1.0",
-			setup: func(t *testing.T, registryDir string) (string, string) {
-				return "", "file:///nonexistent.git"
-			},
-			input:          "\n",
-			args:           []string{"registry", "add", "myreg3", "file:///nonexistent.git"},
-			expectError:    true,
-			expectedStderr: "Error: failed to clone package repository at 'file:///nonexistent.git'",
-			verifyResults: func(t *testing.T, registryDir, packageDir, packageGitURL string) {
-				// Verify registry remains unchanged
-				checkRegistryMetaFile(t, filepath.Join(registryDir, "registry.json"), types.Registry{
-					Name:     "myreg3",
-					Packages: make(map[string]string),
-				})
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Setup registry for this subtest
-			_, registryDir := setupRegistry(t, tempDir, tt.registryName)
-
-			packageDir, packageGitURL := tt.setup(t, registryDir)
-			args := tt.args
-			if packageGitURL != "" && args[len(args)-1] == "" {
-				args[len(args)-1] = packageGitURL
-			}
-
-			cmd := exec.Command(binaryPath, args...)
-			cmd.Dir = tempDir
-			cmd.Stdin = strings.NewReader(tt.input)
-			var stdout, stderr bytes.Buffer
-			cmd.Stdout = &stdout
-			cmd.Stderr = &stderr
-			err := cmd.Run()
-
-			if tt.expectError {
-				if err == nil {
-					t.Errorf("Expected error, got none")
-				}
-				if !strings.Contains(stderr.String(), tt.expectedStderr) {
-					t.Errorf("Expected stderr containing %q, got %q", tt.expectedStderr, stderr.String())
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Unexpected error: %v\nStderr: %s", err, stderr.String())
-				}
-				expectedOutput := fmt.Sprintf("Added package '%s' with version '%s' to registry '%s'\n", tt.packageName, tt.packageVersion, tt.registryName)
-				if stdout.String() != expectedOutput {
-					t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout.String(), stderr.String())
-				}
-			}
-
-			tt.verifyResults(t, registryDir, packageDir, packageGitURL)
-		})
-	}
 }
 
 func TestRegistryDelete(t *testing.T) {
@@ -454,18 +274,65 @@ func TestRegistryClone(t *testing.T) {
 		t.Errorf("Unexpected error: %v\nStderr: %s", err, stderr.String())
 	}
 
-	// Verify results
+	// Verify output
 	expectedOutput := fmt.Sprintf("Cloned registry '%s' from %s\n", registryName, gitURL)
 	if stdout.String() != expectedOutput {
 		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout.String(), stderr.String())
 	}
+
+	// Verify results
 	project := loadProjectFile(t, filepath.Join(packageDir, "Project.json"))
-	verifyRegistryCloned(t, tempDir, registryDir, registryName, map[string]string{packageName: project.UUID})
+	verifyRegistryCloned(t, tempDir, registryDir, registryName, map[string]types.PackageInfo{
+		packageName: {UUID: project.UUID, GitURL: packageGitURL},
+	})
 	checkRegistriesFile(t, filepath.Join(tempDir, ".cosm", "registries", "registries.json"), []string{registryName})
-	verifyRegistryPackage(t, registryDir, packageName, project.UUID, version, packageGitURL)
+	verifyRegistryPackage(t, registryDir, packageName, project.UUID, packageGitURL, version)
+
+	// Verify Git commit in registry
+	verifyRemoteUpdated(t, tempDir, registryDir, fmt.Sprintf("Added package %s version %s", packageName, version))
 }
 
 func TestRelease(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Create a package with bare remote
+	packageName := "mypkg"
+	version := "v1.2.3"
+	packageDir, _ := setupPackageWithGit(t, tempDir, packageName, version)
+
+	// Execute release --patch
+	newVersion := "v1.2.4"
+	stdout, stderr := releasePackage(t, packageDir, "--patch")
+	expectedOutput := fmt.Sprintf("Released version '%s' for project '%s'\n", newVersion, packageName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+	verifyProjectVersion(t, filepath.Join(packageDir, "Project.json"), newVersion)
+	verifyGitTag(t, packageDir, newVersion)
+
+	// Execute release --minor
+	newVersion = "v1.3.0"
+	stdout, stderr = releasePackage(t, packageDir, "--minor")
+	expectedOutput = fmt.Sprintf("Released version '%s' for project '%s'\n", newVersion, packageName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+	verifyProjectVersion(t, filepath.Join(packageDir, "Project.json"), newVersion)
+	verifyGitTag(t, packageDir, newVersion)
+
+	// Execute release --major
+	newVersion = "v2.0.0"
+	stdout, stderr = releasePackage(t, packageDir, "--major")
+	expectedOutput = fmt.Sprintf("Released version '%s' for project '%s'\n", newVersion, packageName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+	verifyProjectVersion(t, filepath.Join(packageDir, "Project.json"), newVersion)
+	verifyGitTag(t, packageDir, newVersion)
+}
+
+func TestRegistryAddFirstTime(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
 
@@ -475,25 +342,119 @@ func TestRelease(t *testing.T) {
 
 	// Create a package and add to registry
 	packageName := "mypkg"
-	version := "v1.2.3"
-	packageDir, gitURL := setupPackageWithGit(t, tempDir, packageName, version)
-	addPackageToRegistry(t, tempDir, registryName, gitURL)
+	packageVersion := "v1.2.3"
+	packageDir, gitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
+	stdout, stderr := addPackageToRegistry(t, tempDir, registryName, gitURL)
 
-	// Execute release --patch
-	patchRelease := "v1.2.4"
-	executeAndVerifyRelease(t, registryDir, packageDir, packageName, []string{version}, patchRelease, "--patch")
+	// Verify output
+	expectedOutput := fmt.Sprintf("Added package '%s' to registry '%s'\n", packageName, registryName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
 
-	// Execute release --minor
-	minorRelease := "v1.3.0"
-	executeAndVerifyRelease(t, registryDir, packageDir, packageName, []string{version, patchRelease}, minorRelease, "--minor")
+	// Check that versions.json does not exist
+	versionsFile := filepath.Join(registryDir, strings.ToUpper(string(packageName[0])), packageName, "versions.json")
+	if _, err := os.Stat(versionsFile); !os.IsNotExist(err) {
+		t.Errorf("Expected no versions.json for '%s' (no released versions), found file", packageName)
+	}
 
-	// Execute release --major
-	majorRelease := "v2.0.0"
-	executeAndVerifyRelease(t, registryDir, packageDir, packageName, []string{version, patchRelease, minorRelease}, majorRelease, "--major")
+	// Verify registry.json
+	project := loadProjectFile(t, filepath.Join(packageDir, "Project.json"))
+	checkRegistryMetaFile(t, filepath.Join(registryDir, "registry.json"), types.Registry{
+		Name: registryName,
+		Packages: map[string]types.PackageInfo{
+			packageName: {UUID: project.UUID, GitURL: gitURL},
+		},
+	})
 
-	// Execute custom release
-	customRelease := "v3.1.2"
-	executeAndVerifyRelease(t, registryDir, packageDir, packageName, []string{version, patchRelease, minorRelease, majorRelease}, customRelease, customRelease)
+	// Verify package clone exists
+	clonePath := filepath.Join(tempDir, ".cosm", "clones", project.UUID)
+	if _, err := os.Stat(clonePath); os.IsNotExist(err) {
+		t.Errorf("Expected package clone at %s, not found", clonePath)
+	}
+
+	verifyRemoteUpdated(t, tempDir, registryDir, fmt.Sprintf("Added package %s", packageName))
+}
+
+func TestRegistryAdd(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Create registry
+	registryName := "myreg"
+	_, registryDir := setupRegistry(t, tempDir, registryName)
+
+	// Create a package and add to registry
+	packageName := "mypkg"
+	packageVersion := "v1.2.3"
+	packageDir, gitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
+
+	// Execute releases
+	releasePackage(t, packageDir, "v1.2.4")
+	releasePackage(t, packageDir, "--patch")
+	releasePackage(t, packageDir, "--minor")
+	releasePackage(t, packageDir, "--major")
+
+	// add package to registry
+	stdout, stderr := addPackageToRegistry(t, tempDir, registryName, gitURL)
+
+	// Verify output
+	expectedOutput := fmt.Sprintf("Added package '%s' to registry '%s'\n", packageName, registryName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+
+	// check that versions v1.2.4, v1.2.5, v1.3.0, v2.0.0 exists
+	project := loadProjectFile(t, filepath.Join(packageDir, "Project.json"))
+	expectedVersions := []string{"v1.2.4", "v1.2.5", "v1.3.0", "v2.0.0"}
+	verifyVersionsJSON(t, filepath.Join(registryDir, strings.ToUpper(string(packageName[0])), packageName, "versions.json"), expectedVersions)
+	for _, version := range expectedVersions {
+		verifyRegistryPackage(t, registryDir, packageName, project.UUID, gitURL, version)
+	}
+}
+
+func TestRegistryAddSingle(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Create registry
+	registryName := "myreg"
+	_, registryDir := setupRegistry(t, tempDir, registryName)
+
+	// Create a package and add to registry
+	packageName := "mypkg"
+	packageVersion := "v1.2.3"
+	packageDir, gitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
+
+	// add package to registry
+	stdout, stderr := addPackageToRegistry(t, tempDir, registryName, gitURL)
+
+	// Verify output
+	expectedOutput := fmt.Sprintf("Added package '%s' to registry '%s'\n", packageName, registryName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+
+	// Execute releases
+	releasePackage(t, packageDir, "v1.2.4")
+	releasePackage(t, packageDir, "--patch")
+	releasePackage(t, packageDir, "--minor")
+	releasePackage(t, packageDir, "--major")
+
+	// Add a single version
+	newVersion := "v1.3.0"
+	_, stderr, err := runCommand(t, tempDir, "registry", "add", registryName, packageName, newVersion)
+	if err != nil {
+		t.Errorf("Unexpected error: %v\nStderr: %s", err, stderr)
+	}
+
+	// check that versions v1.3.0 exists
+	project := loadProjectFile(t, filepath.Join(packageDir, "Project.json"))
+	expectedVersions := []string{"v1.3.0"}
+	verifyVersionsJSON(t, filepath.Join(registryDir, strings.ToUpper(string(packageName[0])), packageName, "versions.json"), expectedVersions)
+	for _, version := range expectedVersions {
+		verifyRegistryPackage(t, registryDir, packageName, project.UUID, gitURL, version)
+	}
 }
 
 func TestRegistryRm(t *testing.T) {
@@ -506,34 +467,207 @@ func TestRegistryRm(t *testing.T) {
 
 	// Create a package and add to registry
 	packageName := "mypkg"
-	version := "v1.2.3"
-	packageDir, gitURL := setupPackageWithGit(t, tempDir, packageName, version)
-	addPackageToRegistry(t, tempDir, registryName, gitURL)
+	packageVersion := "v1.2.3"
+	packageDir, gitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
 
-	// Execute release --patch
+	// Execute releases
 	patchRelease := "v1.2.4"
-	executeAndVerifyRelease(t, registryDir, packageDir, packageName, []string{version}, patchRelease, "--patch")
+	releasePackage(t, packageDir, patchRelease)
 
-	// First remove patch release
-	removeFromRegistry(t, tempDir, registryName, packageName, patchRelease)
+	// add package to registry
+	stdout, stderr := addPackageToRegistry(t, tempDir, registryName, gitURL)
 
-	// Check that package version is successfully removed
-	verifyPackageRemoved(t, registryDir, packageName, patchRelease)
-	// Verify package still exists with original version
+	// Verify output
+	expectedOutput := fmt.Sprintf("Added package '%s' to registry '%s'\n", packageName, registryName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+
+	// Remove the only version
+	stdout, stderr = removeFromRegistry(t, tempDir, registryName, packageName, patchRelease)
+
+	// Verify version removed, package remains
 	project := loadProjectFile(t, filepath.Join(packageDir, "Project.json"))
-	verifyRegistryPackage(t, registryDir, packageName, project.UUID, version, gitURL)
+	verifyVersionsJSON(t, filepath.Join(registryDir, strings.ToUpper(string(packageName[0])), packageName, "versions.json"), []string{})
+	verifyPackageRemoved(t, registryDir, packageName, patchRelease)
+	verifyPackageInRegistry(t, registryDir, packageName, project.UUID, gitURL)
 	verifyRemoteUpdated(t, tempDir, registryDir, fmt.Sprintf("Removed version '%s' of package '%s'", patchRelease, packageName))
 
-	// Now remove the entire package
-	removeFromRegistry(t, tempDir, registryName, packageName, "")
+	// Remove entire package
+	stdout, stderr = removeFromRegistry(t, tempDir, registryName, packageName, "")
 
-	// Check that package is completely removed
+	// Verify package completely removed
 	verifyPackageRemoved(t, registryDir, packageName, "")
 	checkRegistryMetaFile(t, filepath.Join(registryDir, "registry.json"), types.Registry{
 		Name:     registryName,
-		Packages: make(map[string]string),
+		Packages: make(map[string]types.PackageInfo),
 	})
 	verifyRemoteUpdated(t, tempDir, registryDir, fmt.Sprintf("Removed package '%s'", packageName))
+}
+
+func TestAddDependency(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Setup registry
+	registryName := "myreg"
+	setupRegistry(t, tempDir, registryName)
+
+	// Setup package to be added as a dependency
+	packageName := "mypkg"
+	packageVersion := "v0.1.0"
+	packageDir, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
+	releasePackage(t, packageDir, packageVersion)
+	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
+
+	// // Initialize project
+	projectDir := initPackage(t, tempDir, "myproject")
+
+	// Add dependency to project
+	stdout, stderr := addDependencyToProject(t, projectDir, packageName, packageVersion)
+	expectedOutput := fmt.Sprintf("Added dependency '%s' %s from registry '%s' to project\n", packageName, packageVersion, registryName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+
+	// Verify dependency in Project.json
+	verifyProjectDependencies(t, filepath.Join(projectDir, "Project.json"), packageName, packageVersion)
+}
+
+func TestRmDependency(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Setup registry and package
+	registryName := "myreg"
+	setupRegistry(t, tempDir, registryName)
+	packageName := "mypkg"
+	packageVersion := "v0.1.0"
+	packageDir, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
+	releasePackage(t, packageDir, packageVersion)
+	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
+
+	// Initialize project and add dependency
+	projectDir := initPackage(t, tempDir, "myproject")
+	addDependencyToProject(t, projectDir, packageName, packageVersion)
+
+	// Remove dependency
+	removeDependencyFromProject(t, projectDir, packageName)
+
+	// Verify dependency is removed
+	project := loadProjectFile(t, filepath.Join(projectDir, "Project.json"))
+	if _, exists := project.Deps[packageName]; exists {
+		t.Errorf("Dependency '%s' still exists in Project.json", packageName)
+	}
+
+	// Test error: remove non-existent dependency
+	_, stderr, err := runCommand(t, projectDir, "rm", "nonexistent")
+	if err == nil {
+		t.Errorf("Expected error when removing non-existent dependency, got none")
+	}
+	expectedStderr := "Error: dependency 'nonexistent' not found in project\n"
+	if stderr != expectedStderr {
+		t.Errorf("Expected stderr %q, got %q", expectedStderr, stderr)
+	}
+}
+
+func TestMinimalVersionSelectionBuildList(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+	registryName := "myreg"
+	setupRegistry(t, tempDir, registryName)
+
+	// Package E
+	packageDir, gitURL := setupPackageWithGit(t, tempDir, "E", "v1.1.0")
+	releasePackage(t, packageDir, "v1.1.0")
+	releasePackage(t, packageDir, "v1.2.0")
+	releasePackage(t, packageDir, "v1.3.0")
+	addPackageToRegistry(t, tempDir, registryName, gitURL)
+
+	// Package G
+	packageDir, gitURL = setupPackageWithGit(t, tempDir, "G", "v1.1.0")
+	releasePackage(t, packageDir, "v1.1.0")
+	addPackageToRegistry(t, tempDir, registryName, gitURL)
+
+	// Package F
+	packageDir, gitURL = setupPackageWithGit(t, tempDir, "F", "v1.1.0")
+	addDependencyToProject(t, packageDir, "G", "v1.1.0")
+	commitAndPushPackageChanges(t, packageDir, "added G@v1.1.0")
+	releasePackage(t, packageDir, "v1.1.0")
+	addPackageToRegistry(t, tempDir, registryName, gitURL)
+
+	// Package D
+	packageDir, gitURL = setupPackageWithGit(t, tempDir, "D", "v1.1.0")
+	addDependencyToProject(t, packageDir, "E", "v1.1.0")
+	commitAndPushPackageChanges(t, packageDir, "added E@v1.1.0")
+	releasePackage(t, packageDir, "v1.1.0")
+	releasePackage(t, packageDir, "v1.2.0")
+	removeDependencyFromProject(t, packageDir, "E")
+	addDependencyToProject(t, packageDir, "E", "v1.2.0")
+	commitAndPushPackageChanges(t, packageDir, "added E@v1.2.0")
+	releasePackage(t, packageDir, "v1.3.0")
+	releasePackage(t, packageDir, "v1.4.0")
+	addPackageToRegistry(t, tempDir, registryName, gitURL)
+
+	// Package B
+	packageDir, gitURL = setupPackageWithGit(t, tempDir, "B", "v1.1.0")
+	addDependencyToProject(t, packageDir, "D", "v1.1.0")
+	commitAndPushPackageChanges(t, packageDir, "added D@v1.1.0")
+	releasePackage(t, packageDir, "v1.1.0")
+	removeDependencyFromProject(t, packageDir, "D")
+	addDependencyToProject(t, packageDir, "D", "v1.3.0")
+	commitAndPushPackageChanges(t, packageDir, "added D@v1.3.0")
+	releasePackage(t, packageDir, "v1.2.0")
+	addPackageToRegistry(t, tempDir, registryName, gitURL)
+
+	// Package C
+	packageDir, gitURL = setupPackageWithGit(t, tempDir, "C", "v1.1.0")
+	releasePackage(t, packageDir, "v1.1.0")
+	addDependencyToProject(t, packageDir, "D", "v1.4.0")
+	commitAndPushPackageChanges(t, packageDir, "added D@v1.4.0")
+	releasePackage(t, packageDir, "v1.2.0")
+	addDependencyToProject(t, packageDir, "F", "v1.1.0")
+	commitAndPushPackageChanges(t, packageDir, "added F@v1.1.0")
+	releasePackage(t, packageDir, "v1.3.0")
+	addPackageToRegistry(t, tempDir, registryName, gitURL)
+
+	// Package A
+	packageDir, gitURL = setupPackageWithGit(t, tempDir, "A", "v1.0.0")
+	addDependencyToProject(t, packageDir, "B", "v1.2.0")
+	addDependencyToProject(t, packageDir, "C", "v1.2.0")
+
+	// Run cosm activate
+	stdout, stderr, err := runCommand(t, packageDir, "activate")
+	if err != nil {
+		t.Errorf("Unexpected error: %v\nStderr: %s", err, stderr)
+	}
+	expectedOutput := fmt.Sprintf("Generated build list for %s in .cosm/buildlist.json\n", "A")
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+
+	// Verify build list
+	buildListFile := filepath.Join(packageDir, ".cosm", "buildlist.json")
+	buildList := loadBuildList(t, buildListFile)
+	expectedDeps := map[string]string{
+		"B": "v1.2.0",
+		"C": "v1.2.0",
+		"D": "v1.4.0",
+		"E": "v1.2.0",
+	}
+	if len(buildList.Dependencies) != len(expectedDeps) {
+		t.Errorf("Expected %d dependencies, got %d: %v", len(expectedDeps), len(buildList.Dependencies), buildList.Dependencies)
+	}
+	for name, expectedVersion := range expectedDeps {
+		dep, exists := buildList.Dependencies[fmt.Sprintf("%s@v1", buildList.Dependencies[name].UUID)]
+		if !exists {
+			t.Errorf("Dependency %s not found in build list", name)
+			continue
+		}
+		if dep.Name != name || dep.Version != expectedVersion {
+			t.Errorf("Expected %s:%s, got %s:%s", name, expectedVersion, dep.Name, dep.Version)
+		}
+	}
 }
 
 func TestMakePackageAvailable(t *testing.T) {
@@ -544,8 +678,9 @@ func TestMakePackageAvailable(t *testing.T) {
 	registryName := "myreg"
 	packageName := "mypkg"
 	packageVersion := "v0.1.0"
-	_, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
+	packageDir, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
 	setupRegistry(t, tempDir, registryName)
+	releasePackage(t, packageDir, packageVersion)
 	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
 
 	// Load specs to get UUID and SHA1

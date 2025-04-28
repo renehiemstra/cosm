@@ -8,7 +8,7 @@
 // cosm registry delete <registry name> [--force]
 // cosm registry update <registry name>
 // cosm registry update --all
-// cosm registry add <registry name> v<version tag> <giturl>
+// cosm registry add <registry name> <giturl>
 // cosm registry rm <registry name> <package name> [--force]
 // cosm registry rm <registry name> <package name> v<version> [--force]
 
@@ -196,10 +196,12 @@ func main() {
 	registryUpdateCmd.Flags().Bool("all", false, "Update all registries")
 
 	var registryAddCmd = &cobra.Command{
-		Use:          "add [registry-name] [giturl]",
-		Short:        "Register a package version to a registry",
-		Args:         cobra.ExactArgs(2),
-		RunE:         commands.RegistryAdd,
+		Use:   "add <registry name> <package giturl> | <registry name> <package name> <version>",
+		Short: "Add a package or a specific version to a registry",
+		Args:  cobra.RangeArgs(2, 3), // Allow 2 or 3 arguments
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return commands.RegistryAdd(cmd, args)
+		},
 		SilenceUsage: true, // Prevent usage output in stderr
 	}
 

@@ -27,7 +27,7 @@ func setupRegistry(t *testing.T, tempDir, registryName string) (string, string) 
 	gitURL := createBareRepo(t, tempDir, registryName+".git")
 	_, _, err := runCommand(t, tempDir, "registry", "init", registryName, gitURL)
 	if err != nil {
-		t.Fatalf("Failed to init registry '%s': %v", registryName, err)
+		t.Fatalf("Failed to init registry '%s' with git-url '%s': %v", registryName, gitURL, err)
 	}
 	return gitURL, filepath.Join(tempDir, ".cosm", "registries", registryName)
 }
@@ -266,6 +266,54 @@ func removeFromRegistry(t *testing.T, dir, registryName, packageName string, ver
 	}
 }
 
+// commitAndPushPackageChanges stages, commits, and pushes changes in the package directory
+func commitAndPushPackageChanges(t *testing.T, packageDir, commitMsg string) {
+	t.Helper()
+	currentDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	if err := os.Chdir(packageDir); err != nil {
+		t.Fatalf("Failed to change to package directory %s: %v", packageDir, err)
+	}
+	defer os.Chdir(currentDir)
+
+	addCmd := exec.Command("git", "add", ".")
+	addOutput, err := addCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Failed to stage changes in %s: %v\nOutput: %s", packageDir, err, addOutput)
+	}
+
+	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
+	commitOutput, err := commitCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Failed to commit changes in %s: %v\nOutput: %s", packageDir, err, commitOutput)
+	}
+
+	pushCmd := exec.Command("git", "push", "origin", "main")
+	pushOutput, err := pushCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Failed to push changes to origin/main in %s: %v\nOutput: %s", packageDir, err, pushOutput)
+	}
+}
+
+// loadBuildList reads and parses buildlist.json from a given file path
+func loadBuildList(t *testing.T, buildListFile string) types.BuildList {
+	t.Helper()
+	data, err := os.ReadFile(buildListFile)
+	if err != nil {
+		t.Fatalf("Failed to read buildlist.json: %v", err)
+	}
+	var buildList types.BuildList
+	if err := json.Unmarshal(data, &buildList); err != nil {
+		t.Fatalf("Failed to parse buildlist.json: %v", err)
+	}
+	if buildList.Dependencies == nil {
+		buildList.Dependencies = make(map[string]types.BuildListDependency)
+	}
+	return buildList
+}
+
 /////////////////////// Check HELPER FUNCTIONS ///////////////////////
 
 func verifyProjectDependencies(t *testing.T, projectFile, packageName, expectedVersion string) {
@@ -330,11 +378,17 @@ func checkRegistryMetaFile(t *testing.T, registryMetaFile string, expected types
 	if len(registry.Packages) != len(expected.Packages) {
 		t.Errorf("Expected Packages len %d, got %d", len(expected.Packages), len(registry.Packages))
 	}
-	for pkgName, expectedUUID := range expected.Packages {
-		if gotUUID, exists := registry.Packages[pkgName]; !exists {
+	for pkgName, expectedInfo := range expected.Packages {
+		gotInfo, exists := registry.Packages[pkgName]
+		if !exists {
 			t.Errorf("Expected package %q in registry, not found", pkgName)
-		} else if gotUUID != expectedUUID {
-			t.Errorf("Expected UUID %q for package %q, got %q", expectedUUID, pkgName, gotUUID)
+		} else {
+			if gotInfo.UUID != expectedInfo.UUID {
+				t.Errorf("Expected UUID %q for package %q, got %q", expectedInfo.UUID, pkgName, gotInfo.UUID)
+			}
+			if gotInfo.GitURL != expectedInfo.GitURL {
+				t.Errorf("Expected GitURL %q for package %q, got %q", expectedInfo.GitURL, pkgName, gotInfo.GitURL)
+			}
 		}
 	}
 }
@@ -608,28 +662,41 @@ func tagPackageVersion(t *testing.T, packageDir, version string) {
 	}
 }
 
-// verifyRegistryPackage verifies that a package is correctly registered in the registry
-func verifyRegistryPackage(t *testing.T, registryDir, packageName, packageUUID, version, gitURL string) {
+// verifyPackageInRegistry verifies that a package is present in registry.json with the correct UUID and GitURL
+func verifyPackageInRegistry(t *testing.T, registryDir, packageName, packageUUID, packageGitURL string) {
 	t.Helper()
-	// Verify registry.json
-	checkRegistryMetaFile(t, filepath.Join(registryDir, "registry.json"), types.Registry{
-		Name:     filepath.Base(registryDir),
-		Packages: map[string]string{packageName: packageUUID},
-	})
+	registryFile := filepath.Join(registryDir, "registry.json")
+	data, err := os.ReadFile(registryFile)
+	if err != nil {
+		t.Fatalf("Failed to read registry.json: %v", err)
+	}
+	var registry types.Registry
+	if err := json.Unmarshal(data, &registry); err != nil {
+		t.Fatalf("Failed to parse registry.json: %v", err)
+	}
+	pkgInfo, exists := registry.Packages[packageName]
+	if !exists {
+		t.Errorf("Expected package %q in registry.json, not found", packageName)
+	}
+	if pkgInfo.UUID != packageUUID {
+		t.Errorf("Expected UUID %q for package %q, got %q", packageUUID, packageName, pkgInfo.UUID)
+	}
+	if pkgInfo.GitURL != packageGitURL {
+		t.Errorf("Expected GitURL %q for package %q, got %q", packageGitURL, packageName, pkgInfo.GitURL)
+	}
+}
 
-	// Verify versions.json
-	versionsFile := filepath.Join(registryDir, strings.ToUpper(string(packageName[0])), packageName, "versions.json")
-	verifyVersionsJSON(t, versionsFile, []string{version})
-
-	// Verify specs.json
+// verifyRegistryPackage verifies the specs.json for a specific version of a package
+func verifyRegistryPackage(t *testing.T, registryDir, packageName, packageUUID, gitURL, version string) {
+	t.Helper()
 	specsFile := filepath.Join(registryDir, strings.ToUpper(string(packageName[0])), packageName, version, "specs.json")
 	data, err := os.ReadFile(specsFile)
 	if err != nil {
-		t.Fatalf("Failed to read specs.json: %v", err)
+		t.Fatalf("Failed to read specs.json for %s@%s: %v", packageName, version, err)
 	}
 	var specs types.Specs
 	if err := json.Unmarshal(data, &specs); err != nil {
-		t.Fatalf("Failed to parse specs.json: %v", err)
+		t.Fatalf("Failed to parse specs.json for %s@%s: %v", packageName, version, err)
 	}
 	if specs.Name != packageName {
 		t.Errorf("Expected specs.Name %q, got %q", packageName, specs.Name)
@@ -644,7 +711,7 @@ func verifyRegistryPackage(t *testing.T, registryDir, packageName, packageUUID, 
 		t.Errorf("Expected specs.GitURL %q, got %q", gitURL, specs.GitURL)
 	}
 	if specs.SHA1 == "" {
-		t.Errorf("Expected non-empty SHA1 in specs.json")
+		t.Errorf("Expected non-empty SHA1 in specs.json for %s@%s", packageName, version)
 	}
 }
 
@@ -696,7 +763,7 @@ func deleteRegistry(t *testing.T, tempDir, registryName string, force bool) {
 }
 
 // verifyRegistryCloned verifies that a registry was cloned and its metadata is correct
-func verifyRegistryCloned(t *testing.T, tempDir, registryDir, registryName string, packages map[string]string) {
+func verifyRegistryCloned(t *testing.T, tempDir, registryDir, registryName string, packages map[string]types.PackageInfo) {
 	t.Helper()
 	// Verify registry directory exists
 	if _, err := os.Stat(registryDir); os.IsNotExist(err) {

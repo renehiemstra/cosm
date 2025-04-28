@@ -1,11 +1,17 @@
 package types
 
+// PackageInfo represents metadata for a package in a registry
+type PackageInfo struct {
+	UUID   string `json:"uuid"`
+	GitURL string `json:"giturl"`
+}
+
 // Registry represents a package registry
 type Registry struct {
-	Name     string            `json:"name"`
-	UUID     string            `json:"uuid"`
-	GitURL   string            `json:"giturl"`
-	Packages map[string]string `json:"packages"`
+	Name     string                 `json:"name"`
+	UUID     string                 `json:"uuid"`
+	GitURL   string                 `json:"giturl"`
+	Packages map[string]PackageInfo `json:"packages"`
 }
 
 type Dependency struct {

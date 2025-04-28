@@ -21,6 +21,39 @@ func getGlobalCosmDir() (string, error) {
 
 var ValidRegistries = []string{"cosmic-hub", "local"}
 
+func getRegistriesDir() (string, error) {
+	cosmDir, err := getCosmDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get cosm directory: %v", err)
+	}
+	registriesDir := filepath.Join(cosmDir, "registries")
+	if err := os.MkdirAll(registriesDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create registries directory %s: %v", registriesDir, err)
+	}
+	return registriesDir, nil
+}
+
+// removeString removes the specified string from a slice of strings
+func removeString(slice []string, s string) []string {
+	result := []string{}
+	for _, item := range slice {
+		if item != s {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+// promptUserForConfirmation prompts the user for confirmation and returns true if they enter 'y' or 'Y'
+func promptUserForConfirmation(prompt string) bool {
+	fmt.Print(prompt)
+	var response string
+	if _, err := fmt.Scanln(&response); err != nil {
+		return false
+	}
+	return strings.ToLower(response) == "y"
+}
+
 // PrintVersion prints the version of the cosm tool and exits
 func PrintVersion() {
 	fmt.Printf("cosm version %s\n", Version)

@@ -170,25 +170,10 @@ func Release(cmd *cobra.Command, args []string) error {
 	if err := ensureTagDoesNotExist(newVersion); err != nil {
 		return err
 	}
-	registryName, _ := cmd.Flags().GetString("registry")
-	registries, err := findHostingRegistries(project.Name, registryName)
-	if err != nil {
-		return err
-	}
-	if err := ensureRegistriesExist(registries, registryName); err != nil {
-		return err
-	}
 	if err := updateProjectVersion(project, newVersion); err != nil {
 		return err
 	}
 	if err := publishToGitRemote(newVersion); err != nil {
-		return err
-	}
-	projectDir, err := getWorkingDir()
-	if err != nil {
-		return err
-	}
-	if err := publishToRegistries(project, registries, newVersion, projectDir); err != nil {
 		return err
 	}
 	fmt.Printf("Released version '%s' for project '%s'\n", newVersion, project.Name)
@@ -288,15 +273,6 @@ func generateLocalBuildList(project *types.Project, registriesDir string) error 
 		return fmt.Errorf("failed to write %s: %v", buildListFile, err)
 	}
 	return nil
-}
-
-// getWorkingDir retrieves the current working directory
-func getWorkingDir() (string, error) {
-	projectDir, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("failed to get project directory: %v", err)
-	}
-	return projectDir, nil
 }
 
 // validateInitArgs checks the command-line arguments for validity
@@ -472,7 +448,7 @@ func findPackageInRegistries(packageName, versionTag, cosmDir string, registryNa
 	registriesDir := filepath.Join(cosmDir, "registries")
 
 	for _, regName := range registryNames {
-		pkg, found, err := findPackageInRegistry(packageName, versionTag, registriesDir, regName) // Updated to handle error
+		pkg, found, err := findPackageInRegistry(packageName, versionTag, registriesDir, regName)
 		if err != nil {
 			return packageLocation{}, err
 		}
@@ -490,12 +466,13 @@ func findPackageInRegistry(packageName, versionTag, registriesDir, registryName 
 	if err := updateSingleRegistry(registriesDir, registryName); err != nil {
 		return packageLocation{}, false, err
 	}
-	registry, _, err := LoadRegistryMetadata(registriesDir, registryName) // Fixed to handle error
+	registry, _, err := LoadRegistryMetadata(registriesDir, registryName)
 	if err != nil {
 		return packageLocation{}, false, fmt.Errorf("failed to load registry metadata for '%s': %v", registryName, err)
 	}
 
-	if _, exists := registry.Packages[packageName]; !exists {
+	_, exists := registry.Packages[packageName]
+	if !exists {
 		return packageLocation{}, false, nil
 	}
 
@@ -562,17 +539,6 @@ func updateProjectWithDependency(project *types.Project, packageName, versionTag
 		return fmt.Errorf("failed to write Project.json: %v", err)
 	}
 	fmt.Printf("Added dependency '%s' %s from registry '%s' to project\n", packageName, versionTag, registryName)
-	return nil
-}
-
-// ensureRegistriesExist checks if any registries are available for the release
-func ensureRegistriesExist(registries []registryInfo, specificRegistry string) error {
-	if len(registries) == 0 {
-		if specificRegistry != "" {
-			return fmt.Errorf("no registry named '%s' hosts package", specificRegistry)
-		}
-		return fmt.Errorf("no registries found hosting this package")
-	}
 	return nil
 }
 
@@ -652,23 +618,34 @@ func determineNewVersion(cmd *cobra.Command, args []string, currentVersion strin
 	return "", fmt.Errorf("internal error: no version increment selected")
 }
 
-// validateNewVersion ensures the new version is valid and greater than the current
+// validateNewVersion ensures the new version is valid and allowed
 func validateNewVersion(newVersion, currentVersion string) error {
-	if !strings.HasPrefix(newVersion, "v") {
-		return fmt.Errorf("new version '%s' must start with 'v'", newVersion)
-	}
-	newSemVer, err := ParseSemVer(newVersion)
+	// Parse versions
+	currVer, err := ParseSemVer(currentVersion)
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid current version %q: %v", currentVersion, err)
 	}
-	currentSemVer, err := ParseSemVer(currentVersion)
+	newVer, err := ParseSemVer(newVersion)
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid new version %q: %v", newVersion, err)
 	}
-	if newSemVer.Major < currentSemVer.Major ||
-		(newSemVer.Major == currentSemVer.Major && newSemVer.Minor < currentSemVer.Minor) ||
-		(newSemVer.Major == currentSemVer.Major && newSemVer.Minor == currentSemVer.Minor && newSemVer.Patch <= currentSemVer.Patch) {
-		return fmt.Errorf("new version '%s' must be greater than current version '%s'", newVersion, currentVersion)
+
+	// Allow same version if not tagged, otherwise require newer
+	if newVersion == currentVersion {
+		return nil // Tag existence checked later by ensureTagDoesNotExist
+	}
+
+	// Compare versions: newVer must be greater than currVer
+	if newVer.Major < currVer.Major {
+		return fmt.Errorf("new version %q must be greater than current version %q", newVersion, currentVersion)
+	}
+	if newVer.Major == currVer.Major {
+		if newVer.Minor < currVer.Minor {
+			return fmt.Errorf("new version %q must be greater than current version %q", newVersion, currentVersion)
+		}
+		if newVer.Minor == currVer.Minor && newVer.Patch <= currVer.Patch {
+			return fmt.Errorf("new version %q must be greater than current version %q", newVersion, currentVersion)
+		}
 	}
 	return nil
 }
@@ -696,206 +673,55 @@ type registryInfo struct {
 	PackageDir string
 }
 
-// findHostingRegistries identifies registries hosting the package
-func findHostingRegistries(packageName, specificRegistry string) ([]registryInfo, error) {
-	cosmDir, err := getCosmDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get cosm directory: %v", err)
-	}
-	registryNames, err := loadRegistryNames(cosmDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load registry names: %v", err)
-	}
-	registriesDir := filepath.Join(cosmDir, "registries")
-	var registries []registryInfo
-
-	for _, regName := range registryNames {
-		if specificRegistry != "" && regName != specificRegistry {
-			continue
-		}
-		registry, registryMetaFile, err := LoadRegistryMetadata(registriesDir, regName) // Updated to handle error
-		if err != nil {
-			return nil, fmt.Errorf("failed to load registry metadata for '%s': %v", regName, err)
-		}
-		if _, exists := registry.Packages[packageName]; exists {
-			packageDir := filepath.Join(registriesDir, regName, strings.ToUpper(string(packageName[0])), packageName)
-			registries = append(registries, registryInfo{
-				Name:       regName,
-				MetaFile:   registryMetaFile,
-				PackageDir: packageDir,
-			})
-		}
-	}
-	return registries, nil
-}
-
-// updateProjectVersion updates the version in Project.json and saves it
+// updateProjectVersion updates Project.json with the new version and commits the change
 func updateProjectVersion(project *types.Project, newVersion string) error {
+	if newVersion == project.Version {
+		// No change needed, skip write and commit
+		return nil
+	}
+
 	project.Version = newVersion
-	data, err := marshalProject(*project) // Fixed to handle two return values
+	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal Project.json: %v", err)
 	}
-	if err := writeProjectFile("Project.json", data); err != nil { // Updated to handle error
-		return err
+	if err := os.WriteFile("Project.json", data, 0644); err != nil {
+		return fmt.Errorf("failed to write Project.json: %v", err)
 	}
+
+	addCmd := exec.Command("git", "add", "Project.json")
+	if addOutput, err := addCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to stage Project.json: %v\nOutput: %s", err, addOutput)
+	}
+
+	commitCmd := exec.Command("git", "commit", "-m", fmt.Sprintf("Release %s", newVersion))
+	if commitOutput, err := commitCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to commit release: %v\nOutput: %s", err, commitOutput)
+	}
+
 	return nil
 }
 
-// publishToGitRemote commits, tags, and pushes the new version to the remote
-func publishToGitRemote(newVersion string) error {
-	if err := exec.Command("git", "add", "Project.json").Run(); err != nil {
-		return fmt.Errorf("failed to stage Project.json: %v", err)
+// publishToGitRemote tags and pushes the release to the remote repository
+func publishToGitRemote(version string) error {
+	tagCmd := exec.Command("git", "tag", version)
+	if tagOutput, err := tagCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to tag version %q: %v\nOutput: %s", version, err, tagOutput)
 	}
-	commitMsg := fmt.Sprintf("Release %s", newVersion)
-	if err := exec.Command("git", "commit", "-m", commitMsg).Run(); err != nil {
-		return fmt.Errorf("failed to commit release: %v", err)
-	}
-	if err := exec.Command("git", "tag", newVersion).Run(); err != nil {
-		return fmt.Errorf("failed to tag release '%s': %v", newVersion, err)
-	}
-	if err := exec.Command("git", "push", "origin", "main").Run(); err != nil {
-		return fmt.Errorf("failed to push to origin/main: %v", err)
-	}
-	if err := exec.Command("git", "push", "origin", newVersion).Run(); err != nil {
-		return fmt.Errorf("failed to push tag '%s' to origin: %v", newVersion, err)
-	}
-	return nil
-}
 
-// publishToRegistries adds the new release to the specified registries
-func publishToRegistries(project *types.Project, registries []registryInfo, newVersion string, projectDir string) error {
-	currentDir, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get current directory: %v", err)
-	}
-	cosmDir, err := getCosmDir()
-	if err != nil {
-		cleanupPublish(currentDir)
-		return fmt.Errorf("failed to get cosm directory: %v", err)
-	}
-	registryDir := setupRegistriesDir(cosmDir)
-	for _, reg := range registries {
-		if err := updateSingleRegistry(registryDir, reg.Name); err != nil {
-			cleanupPublish(currentDir)
-			return fmt.Errorf("failed to update registry '%s': %v", reg.Name, err)
-		}
-		if err := updateRegistryVersions(reg.PackageDir, newVersion, project, reg.Name, projectDir); err != nil {
-			cleanupPublish(currentDir)
-			return err
-		}
-		if err := commitAndPushRegistryChanges(registryDir, reg.Name, project.Name, newVersion); err != nil {
-			cleanupPublish(currentDir)
-			return err
+	pushCmd := exec.Command("git", "push", "origin", "main")
+	if pushOutput, err := pushCmd.CombinedOutput(); err != nil {
+		// Ignore "everything up-to-date" errors
+		if !strings.Contains(string(pushOutput), "Everything up-to-date") {
+			return fmt.Errorf("failed to push to origin main: %v\nOutput: %s", err, pushOutput)
 		}
 	}
-	if err := restorePublishDir(currentDir); err != nil {
-		return err
-	}
-	return nil
-}
 
-// cleanupPublish reverts to the original directory
-func cleanupPublish(originalDir string) {
-	if err := os.Chdir(originalDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to return to original directory %s: %v\n", originalDir, err)
-	}
-}
-
-// restorePublishDir returns to the original directory
-func restorePublishDir(originalDir string) error {
-	if err := os.Chdir(originalDir); err != nil {
-		return fmt.Errorf("failed to return to original directory %s: %v", originalDir, err)
-	}
-	return nil
-}
-
-// updateRegistryVersions updates versions.json and adds a specs file for the new version
-func updateRegistryVersions(packageDir, newVersion string, project *types.Project, registryName, projectDir string) error {
-	versionsFile := filepath.Join(packageDir, "versions.json")
-	var versions []string
-	if data, err := os.ReadFile(versionsFile); err == nil {
-		if err := json.Unmarshal(data, &versions); err != nil {
-			return fmt.Errorf("failed to parse versions.json in registry '%s': %v", registryName, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("failed to read versions.json in registry '%s': %v", registryName, err)
-	}
-	for _, v := range versions {
-		if v == newVersion {
-			return fmt.Errorf("version '%s' already exists in registry '%s'", newVersion, registryName)
-		}
-	}
-	versions = append(versions, newVersion)
-	data, err := json.MarshalIndent(versions, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal versions.json in registry '%s': %v", registryName, err)
-	}
-	if err := os.WriteFile(versionsFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write versions.json in registry '%s': %v", registryName, err)
+	pushTagCmd := exec.Command("git", "push", "origin", version)
+	if pushTagOutput, err := pushTagCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to push tag %q: %v\nOutput: %s", version, err, pushTagOutput)
 	}
 
-	versionDir := filepath.Join(packageDir, newVersion)
-	if err := os.MkdirAll(versionDir, 0755); err != nil {
-		return fmt.Errorf("failed to create version directory '%s' in registry '%s': %v", versionDir, registryName, err)
-	}
-	sha1, err := getSHA1ForTag(newVersion, projectDir, fmt.Sprintf("registry '%s'", registryName)) // Updated to handle error
-	if err != nil {
-		return err
-	}
-
-	specs := types.Specs{
-		Name:    project.Name,
-		UUID:    project.UUID,
-		Version: newVersion,
-		GitURL:  "", // Could fetch from git config if needed
-		SHA1:    sha1,
-		Deps:    project.Deps,
-	}
-	data, err = json.MarshalIndent(specs, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal specs.json for version '%s' in registry '%s': %v", newVersion, registryName, err)
-	}
-	specsFile := filepath.Join(versionDir, "specs.json")
-	if err := os.WriteFile(specsFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write specs.json for version '%s' in registry '%s': %v", newVersion, registryName, err)
-	}
-	return nil
-}
-
-// getSHA1ForTag retrieves the SHA1 hash for a given tag in the specified directory
-func getSHA1ForTag(tag, dir, context string) (string, error) {
-	currentDir, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current directory: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		cleanupSHA1(currentDir)
-		return "", fmt.Errorf("failed to change to directory %s: %v", dir, err)
-	}
-	sha1Output, err := exec.Command("git", "rev-list", "-n", "1", tag).Output()
-	if err != nil {
-		cleanupSHA1(currentDir)
-		return "", fmt.Errorf("failed to get SHA1 for tag '%s' in %s: %v", tag, context, err)
-	}
-	if err := restoreSHA1Dir(currentDir); err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(sha1Output)), nil
-}
-
-// cleanupSHA1 reverts to the original directory
-func cleanupSHA1(originalDir string) {
-	if err := os.Chdir(originalDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to return to original directory %s: %v\n", originalDir, err)
-	}
-}
-
-// restoreSHA1Dir returns to the original directory
-func restoreSHA1Dir(originalDir string) error {
-	if err := os.Chdir(originalDir); err != nil {
-		return fmt.Errorf("failed to return to original directory %s: %v", originalDir, err)
-	}
 	return nil
 }
 
