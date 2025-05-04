@@ -13,14 +13,18 @@ import (
 
 // Release updates the project version and publishes it to the remote repository and registries
 func Release(cmd *cobra.Command, args []string) error {
+	projectDir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
 	project, err := loadProject("Project.json")
 	if err != nil {
 		return err
 	}
-	if err := ensureNoUncommittedChanges(); err != nil {
+	if err := ensureNoUncommittedChanges(projectDir); err != nil {
 		return err
 	}
-	if err := ensureLocalRepoInSyncWithOrigin(); err != nil {
+	if err := ensureLocalRepoInSyncWithOrigin(projectDir); err != nil {
 		return err
 	}
 	newVersion, err := determineNewVersion(cmd, args, project.Version)
@@ -36,7 +40,7 @@ func Release(cmd *cobra.Command, args []string) error {
 	if err := updateProjectVersion(project, newVersion); err != nil {
 		return err
 	}
-	if err := publishToGitRemote(newVersion); err != nil {
+	if err := publishToGitRemote(projectDir, newVersion); err != nil {
 		return err
 	}
 	fmt.Printf("Released version '%s' for project '%s'\n", newVersion, project.Name)

@@ -2,10 +2,27 @@ package commands
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 )
 
 const Version = "0.1.0" // Move the version constant here
+
+// runCommand executes a command in the specified directory, returning the output and any error.
+// The command is provided as a slice of arguments (e.g., []string{"git", "checkout", "-"}).
+func runCommand(dir string, args ...string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("no command arguments provided")
+	}
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	outputStr := strings.TrimSpace(string(output))
+	if err != nil {
+		return outputStr, fmt.Errorf("failed to run '%s' in %s: %v\nOutput: %s", strings.Join(args, " "), dir, err, outputStr)
+	}
+	return outputStr, nil
+}
 
 // removeString removes the specified string from a slice of strings
 func removeString(slice []string, s string) []string {

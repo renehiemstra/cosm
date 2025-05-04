@@ -2,182 +2,166 @@ package commands
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
 
+// getCurrentBranch retrieves the current branch name for the repository in the specified directory.
+func getCurrentBranch(dir string) (string, error) {
+	branch, err := runCommand(dir, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("failed to determine current branch in %s: %v", dir, err)
+	}
+	if branch == "" {
+		return "", fmt.Errorf("no current branch detected in %s", dir)
+	}
+	return branch, nil
+}
+
+// wrapGitError wraps a Git command error with directory context.
+func wrapGitError(dir, msg string, err error) error {
+	return fmt.Errorf("%s in %s: %v", msg, dir, err)
+}
+
+// pushToRemote pushes the specified target (branch or tag) to origin.
+func pushToRemote(dir, target string, ignoreUpToDate bool) error {
+	output, err := runCommand(dir, "git", "push", "origin", target)
+	if err != nil && !(ignoreUpToDate && strings.Contains(output, "Everything up-to-date")) {
+		return fmt.Errorf("failed to push %s to origin in %s: %v", target, dir, err)
+	}
+	return nil
+}
+
+// fetchOrigin fetches updates from origin.
+func fetchOrigin(dir string) error {
+	if _, err := runCommand(dir, "git", "fetch", "origin"); err != nil {
+		return wrapGitError(dir, "failed to fetch from origin", err)
+	}
+	return nil
+}
+
 // getGitAuthors retrieves the author info from git config or uses a default
 func getGitAuthors() ([]string, error) {
-	name, errName := exec.Command("git", "config", "user.name").Output()
-	email, errEmail := exec.Command("git", "config", "user.email").Output()
-	if errName != nil || errEmail != nil || len(name) == 0 || len(email) == 0 {
-		fmt.Println("Warning: Could not retrieve git user.name or user.email, defaulting to '[unknown]unknown@author.com'")
-		return []string{"[unknown]unknown@author.com"}, nil // Return default with no error
+	name, errName := runCommand("", "git", "config", "user.name")
+	if errName != nil {
+		name = ""
 	}
-	gitName := strings.TrimSpace(string(name))
-	gitEmail := strings.TrimSpace(string(email))
-	return []string{fmt.Sprintf("[%s]%s", gitName, gitEmail)}, nil
+	email, errEmail := runCommand("", "git", "config", "user.email")
+	if errEmail != nil {
+		email = ""
+	}
+	if name == "" || email == "" {
+		fmt.Println("Warning: Could not retrieve git user.name or user.email, defaulting to '[unknown]unknown@author.com'")
+		return []string{"[unknown]unknown@author.com"}, nil
+	}
+	return []string{fmt.Sprintf("[%s]%s", name, email)}, nil
 }
 
 // revertClone returns the clone to its previous branch or state using 'git checkout -'
 func revertClone(clonePath string) error {
-	currentDir, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get current directory: %v", err)
-	}
-	if err := os.Chdir(clonePath); err != nil {
-		cleanupRevert(currentDir)
-		return fmt.Errorf("failed to change to clone directory %s: %v", clonePath, err)
-	}
-
-	// Revert to the previous branch or commit state
-	cmd := exec.Command("git", "checkout", "-")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		cleanupRevert(currentDir)
-		return fmt.Errorf("failed to revert clone to previous state: %v\nOutput: %s", err, output)
-	}
-
-	if err := restoreRevertDir(currentDir); err != nil {
-		return err
-	}
-	return nil
-}
-
-// cleanupRevert reverts to the original directory
-func cleanupRevert(originalDir string) {
-	if err := os.Chdir(originalDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to return to original directory %s: %v\n", originalDir, err)
-	}
-}
-
-// restoreRevertDir returns to the original directory
-func restoreRevertDir(originalDir string) error {
-	if err := os.Chdir(originalDir); err != nil {
-		return fmt.Errorf("failed to return to original directory %s: %v", originalDir, err)
-	}
-	return nil
+	_, err := runCommand(clonePath, "git", "checkout", "-")
+	return err
 }
 
 // commitAndPushRegistryChanges stages, commits, and pushes changes to the registry
 func commitAndPushRegistryChanges(registriesDir, registryName, commitMsg string) error {
 	registryDir := filepath.Join(registriesDir, registryName)
-	if err := os.Chdir(registryDir); err != nil {
-		return fmt.Errorf("failed to change to registry directory %s: %v", registryName, err)
+
+	// Stage changes
+	if _, err := runCommand(registryDir, "git", "add", "."); err != nil {
+		return wrapGitError(registryDir, "failed to stage registry changes", err)
 	}
-	addCmd := exec.Command("git", "add", ".")
-	if addOutput, err := addCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to stage registry changes: %v\nOutput: %s", err, addOutput)
+
+	// Commit changes
+	if _, err := runCommand(registryDir, "git", "commit", "-m", commitMsg); err != nil {
+		return wrapGitError(registryDir, "failed to commit registry changes", err)
 	}
-	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
-	if commitOutput, err := commitCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to commit registry changes: %v\nOutput: %s", err, commitOutput)
+
+	// Get the current branch
+	branch, err := getCurrentBranch(registryDir)
+	if err != nil {
+		return err
 	}
-	pushCmd := exec.Command("git", "push", "origin", "main")
-	if pushOutput, err := pushCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to push registry changes: %v\nOutput: %s", err, pushOutput)
-	}
-	return nil
+
+	// Push changes to the current branch
+	return pushToRemote(registryDir, branch, false)
 }
 
 // checkoutVersion switches the clone to the specified SHA1
 func checkoutVersion(clonePath, sha1 string) error {
-	currentDir, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get current directory: %v", err)
-	}
-	if err := os.Chdir(clonePath); err != nil {
-		cleanupCheckout(currentDir)
-		return fmt.Errorf("failed to change to clone directory %s: %v", clonePath, err)
-	}
-
 	// Fetch updates to ensure we have the latest refs
-	if err := exec.Command("git", "fetch", "origin").Run(); err != nil {
-		cleanupCheckout(currentDir)
-		return fmt.Errorf("failed to fetch updates: %v", err)
+	if err := fetchOrigin(clonePath); err != nil {
+		return err
 	}
 
 	// Checkout the specific SHA1
-	cmd := exec.Command("git", "checkout", sha1)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		cleanupCheckout(currentDir)
-		return fmt.Errorf("failed to checkout SHA1 %s: %v\nOutput: %s", sha1, err, output)
+	if _, err := runCommand(clonePath, "git", "checkout", sha1); err != nil {
+		return fmt.Errorf("failed to checkout SHA1 %s in %s: %v", sha1, clonePath, err)
 	}
 
-	if err := restoreCheckoutDir(currentDir); err != nil {
-		return err
-	}
-	return nil
-}
-
-// cleanupCheckout reverts to the original directory
-func cleanupCheckout(originalDir string) {
-	if err := os.Chdir(originalDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to return to original directory %s: %v\n", originalDir, err)
-	}
-}
-
-// restoreCheckoutDir returns to the original directory
-func restoreCheckoutDir(originalDir string) error {
-	if err := os.Chdir(originalDir); err != nil {
-		return fmt.Errorf("failed to return to original directory %s: %v", originalDir, err)
-	}
 	return nil
 }
 
 // publishToGitRemote tags and pushes the release to the remote repository
-func publishToGitRemote(version string) error {
-	tagCmd := exec.Command("git", "tag", version)
-	if tagOutput, err := tagCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to tag version %q: %v\nOutput: %s", version, err, tagOutput)
+func publishToGitRemote(projectDir, version string) error {
+	// Tag the version
+	if _, err := runCommand(projectDir, "git", "tag", version); err != nil {
+		return wrapGitError(projectDir, fmt.Sprintf("failed to tag version %q", version), err)
 	}
 
-	pushCmd := exec.Command("git", "push", "origin", "main")
-	if pushOutput, err := pushCmd.CombinedOutput(); err != nil {
-		// Ignore "everything up-to-date" errors
-		if !strings.Contains(string(pushOutput), "Everything up-to-date") {
-			return fmt.Errorf("failed to push to origin main: %v\nOutput: %s", err, pushOutput)
-		}
+	// Get the current branch
+	branch, err := getCurrentBranch(projectDir)
+	if err != nil {
+		return err
 	}
 
-	pushTagCmd := exec.Command("git", "push", "origin", version)
-	if pushTagOutput, err := pushTagCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to push tag %q: %v\nOutput: %s", version, err, pushTagOutput)
+	// Push to the current branch
+	if err := pushToRemote(projectDir, branch, true); err != nil {
+		return err
 	}
 
-	return nil
+	// Push the tag
+	return pushToRemote(projectDir, version, false)
 }
 
 // ensureNoUncommittedChanges checks for uncommitted changes in the Git repo
-func ensureNoUncommittedChanges() error {
-	statusCmd := exec.Command("git", "status", "--porcelain")
-	output, err := statusCmd.Output()
+func ensureNoUncommittedChanges(projectDir string) error {
+	output, err := runCommand(projectDir, "git", "status", "--porcelain")
 	if err != nil {
-		return fmt.Errorf("failed to check Git status: %v", err)
+		return wrapGitError(projectDir, "failed to check Git status", err)
 	}
-	if len(strings.TrimSpace(string(output))) > 0 {
-		return fmt.Errorf("repository has uncommitted changes: please commit or stash them before releasing")
+	if len(strings.TrimSpace(output)) > 0 {
+		return fmt.Errorf("repository has uncommitted changes in %s: please commit or stash them before releasing", projectDir)
 	}
 	return nil
 }
 
 // ensureLocalRepoInSyncWithOrigin ensures the local repo is ahead or in sync with origin
-func ensureLocalRepoInSyncWithOrigin() error {
-	fetchCmd := exec.Command("git", "fetch", "origin")
-	if err := fetchCmd.Run(); err != nil {
-		return fmt.Errorf("failed to fetch from origin: %v", err)
-	}
-	// Check if local is behind origin
-	revListCmd := exec.Command("git", "rev-list", "--count", "HEAD..origin/main")
-	output, err := revListCmd.Output()
+func ensureLocalRepoInSyncWithOrigin(projectDir string) error {
+	// Get the current branch
+	branch, err := getCurrentBranch(projectDir)
 	if err != nil {
-		return fmt.Errorf("failed to check sync with origin: %v", err)
+		return err
 	}
-	behindCount, _ := strconv.Atoi(strings.TrimSpace(string(output)))
+
+	// Fetch updates from origin
+	if err := fetchOrigin(projectDir); err != nil {
+		return err
+	}
+
+	// Check if local is behind origin
+	output, err := runCommand(projectDir, "git", "rev-list", "--count", fmt.Sprintf("HEAD..origin/%s", branch))
+	if err != nil {
+		return fmt.Errorf("failed to check sync with origin/%s in %s: %v", branch, projectDir, err)
+	}
+	behindCount, err := strconv.Atoi(strings.TrimSpace(output))
+	if err != nil {
+		return wrapGitError(projectDir, "failed to parse behind count", err)
+	}
 	if behindCount > 0 {
-		return fmt.Errorf("local repository is behind origin: please pull changes before proceeding")
+		return fmt.Errorf("local repository is behind origin/%s in %s: please pull changes before proceeding", branch, projectDir)
 	}
+
 	return nil
 }
