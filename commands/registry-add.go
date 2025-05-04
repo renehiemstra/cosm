@@ -357,25 +357,6 @@ func restoreRegistryAddDir(originalDir string) error {
 	return nil
 }
 
-// clonePackageToTempDir creates a temp clone directly in the clones directory
-func clonePackageToTempDir(cosmDir, packageGitURL string) (string, error) {
-	clonesDir := filepath.Join(cosmDir, "clones")
-	if err := os.MkdirAll(clonesDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create clones directory: %v", err)
-	}
-	tmpClonePath := filepath.Join(clonesDir, "tmp-clone")
-
-	if err := exec.Command("git", "clone", packageGitURL, tmpClonePath).Run(); err != nil {
-		cloneOutput, _ := exec.Command("git", "clone", packageGitURL, tmpClonePath).CombinedOutput()
-		cleanupErr := cleanupTempClone(tmpClonePath)
-		if cleanupErr != nil {
-			return "", fmt.Errorf("failed to clone package repository at '%s': %v; cleanup failed: %v\nOutput: %s", packageGitURL, err, cleanupErr, cloneOutput)
-		}
-		return "", fmt.Errorf("failed to clone package repository at '%s': %v\nOutput: %s", packageGitURL, err, cloneOutput)
-	}
-	return tmpClonePath, nil
-}
-
 // enterCloneDir changes to the temporary clone directory
 func enterCloneDir(tmpClonePath string) error {
 	if err := os.Chdir(tmpClonePath); err != nil {

@@ -33,6 +33,7 @@ func getCosmDir() (string, error) {
 	return cosmDir, nil
 }
 
+// getRegistriesDir returns the registries directory within the .cosm directory
 func getRegistriesDir() (string, error) {
 	cosmDir, err := getCosmDir()
 	if err != nil {
