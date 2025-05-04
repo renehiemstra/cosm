@@ -5,206 +5,231 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
 
+// addPackageConfig holds configuration for adding a package to a registry
+type addPackageConfig struct {
+	registryName  string
+	packageName   string
+	versionTag    string
+	packageGitURL string
+	cosmDir       string
+	registriesDir string
+	registry      types.Registry
+	registryFile  string
+	packageUUID   string
+	packageDir    string
+	clonePath     string
+	tags          []string
+}
+
 // RegistryAdd adds a package with all versions or a specific version to a registry
 func RegistryAdd(cmd *cobra.Command, args []string) error {
-	registryName, packageName, versionTag, packageGitURL, cosmDir, registriesDir, err := parseArgsAndSetup(args)
-	if err != nil {
-		return err
-	}
-	if err := updateSingleRegistry(registriesDir, registryName); err != nil {
-		return err
-	}
-	registry, registryMetaFile, err := LoadRegistryMetadata(registriesDir, registryName)
+	// Parse arguments and setup
+	config, err := parseRegistryAddArgs(args)
 	if err != nil {
 		return err
 	}
 
-	var packageUUID string
-	var tags []string
-	var tmpClonePath, currentDir string
-	if len(args) == 2 {
+	// Update registry
+	if err := updateSingleRegistry(config.registriesDir, config.registryName); err != nil {
+		return err
+	}
+
+	// Load registry metadata
+	config.registry, config.registryFile, err = LoadRegistryMetadata(config.registriesDir, config.registryName)
+	if err != nil {
+		return err
+	}
+
+	if config.versionTag == "" {
 		// Mode 1: Add package with all versions
-		tmpClonePath, err = clonePackageToTempDir(cosmDir, packageGitURL)
-		if err != nil {
-			return err
-		}
-		currentDir, err = os.Getwd()
-		if err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return fmt.Errorf("failed to get current directory: %v", err)
-		}
-		if err := enterCloneDir(tmpClonePath); err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return err
-		}
-		// Fetch tags to ensure latest tags are available
-		fetchCmd := exec.Command("git", "fetch", "--tags")
-		if fetchOutput, err := fetchCmd.CombinedOutput(); err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return fmt.Errorf("failed to fetch tags for repository at '%s': %v\nOutput: %s", packageGitURL, err, fetchOutput)
-		}
-		// Validate Project.json to get package name and UUID
-		project, err := loadProjectFromDir(tmpClonePath)
-		if err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return err
-		}
-		err = validateProject(project)
-		if err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return err
-		}
-		packageName = project.Name
-		packageUUID = project.UUID
-		if err := ensurePackageNotRegistered(registry, packageName, registryName, tmpClonePath); err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return err
-		}
-		tags, err = validateAndCollectVersionTags(packageGitURL, "")
-		if err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return err
-		}
-		packageDir, err := setupPackageDir(registriesDir, registryName, packageName)
-		if err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return err
-		}
-		if len(tags) > 0 {
-			// Update versions for all tags, handling checkout
-			if err := updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL, tags, registriesDir, tmpClonePath); err != nil {
-				cleanupRegistryAdd(currentDir, tmpClonePath)
-				return err
-			}
-		}
+		return addPackageWithAllVersions(config)
+	}
+	// Mode 2: Add specific version
+	return addSpecificPackageVersion(config)
+}
 
-		// Update registry.json and move clone
-		registry.Packages[packageName] = types.PackageInfo{
-			UUID:   packageUUID,
-			GitURL: packageGitURL,
+// parseAddArgs validates arguments and sets up directories
+func parseRegistryAddArgs(args []string) (*addPackageConfig, error) {
+	if len(args) != 2 && len(args) != 3 {
+		return nil, fmt.Errorf("requires two arguments (registry name, package giturl) or three arguments (registry name, package name, version)")
+	}
+	registryName := args[0]
+	if registryName == "" {
+		return nil, fmt.Errorf("registry name must not be empty")
+	}
+	cosmDir, err := getCosmDir()
+	if err != nil {
+		return nil, err
+	}
+	registriesDir := filepath.Join(cosmDir, "registries")
+	if len(args) == 2 {
+		packageGitURL := args[1]
+		if packageGitURL == "" {
+			return nil, fmt.Errorf("package giturl must not be empty")
 		}
-		data, err := json.MarshalIndent(registry, "", "  ")
-		if err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return fmt.Errorf("failed to marshal registry.json for '%s': %v", registryName, err)
-		}
-		if err := os.WriteFile(registryMetaFile, data, 0644); err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return fmt.Errorf("failed to write registry.json for '%s': %v", registryName, err)
-		}
-		_, err = moveCloneToPermanentDir(cosmDir, tmpClonePath, packageUUID)
-		if err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return err
-		}
-		commitMsg := fmt.Sprintf("Added package %s", packageName)
-		if len(tags) > 0 {
-			commitMsg = fmt.Sprintf("Added package %s version %s", packageName, tags[0])
-		}
-		if err := commitAndPushRegistryChanges(registriesDir, registryName, commitMsg); err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return err
-		}
-		if err := restoreRegistryAddDir(currentDir); err != nil {
-			cleanupRegistryAdd(currentDir, tmpClonePath)
-			return err
-		}
-		cleanupRegistryAdd(currentDir, tmpClonePath)
-		fmt.Printf("Added package '%s' to registry '%s'\n", packageName, registryName)
-		return nil
+		return &addPackageConfig{
+			registryName:  registryName,
+			packageGitURL: packageGitURL,
+			cosmDir:       cosmDir,
+			registriesDir: registriesDir,
+		}, nil
+	}
+	packageName := args[1]
+	versionTag := args[2]
+	if packageName == "" {
+		return nil, fmt.Errorf("package name must not be empty")
+	}
+	if versionTag == "" || !strings.HasPrefix(versionTag, "v") {
+		return nil, fmt.Errorf("version must be non-empty and start with 'v'")
+	}
+	return &addPackageConfig{
+		registryName:  registryName,
+		packageName:   packageName,
+		versionTag:    versionTag,
+		cosmDir:       cosmDir,
+		registriesDir: registriesDir,
+	}, nil
+}
+
+// addPackageWithAllVersions adds a package with all available versions to the registry
+func addPackageWithAllVersions(config *addPackageConfig) error {
+	// Clone package to temporary directory
+	clonePath, err := clonePackageToTempDir(config.cosmDir, config.packageGitURL)
+	if err != nil {
+		return err
+	}
+	config.clonePath = clonePath
+	defer cleanupTempClone(config.clonePath)
+
+	// Fetch tags to ensure latest tags are available
+	if _, err := gitCommand(config.clonePath, "fetch", "--tags"); err != nil {
+		return fmt.Errorf("failed to fetch tags for repository at '%s': %v", config.packageGitURL, err)
 	}
 
-	// Mode 2: Add specific version of existing package
-	pkgInfo, exists := registry.Packages[packageName]
+	// Validate Project.json to get package name and UUID
+	project, err := loadProjectFromDir(config.clonePath)
+	if err != nil {
+		return err
+	}
+	err = validateProject(project)
+	if err != nil {
+		return err
+	}
+	config.packageName = project.Name
+	config.packageUUID = project.UUID
+	if err := ensurePackageNotRegistered(config.registry, config.packageName, config.registryName, config.clonePath); err != nil {
+		return err
+	}
+	config.tags, err = validateAndCollectVersionTags(config.clonePath)
+	if err != nil {
+		return err
+	}
+	config.packageDir, err = setupPackageDir(config.registriesDir, config.registryName, config.packageName)
+	if err != nil {
+		return err
+	}
+	if len(config.tags) > 0 {
+		// Update versions for all tags
+		if err := updatePackageVersions(config.packageDir, config.packageName, config.packageUUID, config.packageGitURL, config.tags, config.registriesDir, config.clonePath); err != nil {
+			return err
+		}
+	}
+
+	// Update registry.json and move clone
+	config.registry.Packages[config.packageName] = types.PackageInfo{
+		UUID:   config.packageUUID,
+		GitURL: config.packageGitURL,
+	}
+	if err := saveRegistryMetadata(config.registry, config.registryFile); err != nil {
+		return err
+	}
+	config.clonePath, err = moveCloneToPermanentDir(config.cosmDir, config.clonePath, config.packageUUID)
+	if err != nil {
+		return err
+	}
+	commitMsg := fmt.Sprintf("Added package %s", config.packageName)
+	if len(config.tags) > 0 {
+		commitMsg = fmt.Sprintf("Added package %s version %s", config.packageName, config.tags[0])
+	}
+	if err := commitAndPushRegistryChanges(config.registriesDir, config.registryName, commitMsg); err != nil {
+		return err
+	}
+	fmt.Printf("Added package '%s' to registry '%s'\n", config.packageName, config.registryName)
+	return nil
+}
+
+// addSpecificPackageVersion adds a specific version of an existing package to the registry
+func addSpecificPackageVersion(config *addPackageConfig) error {
+	// Check if package exists in registry
+	pkgInfo, exists := config.registry.Packages[config.packageName]
 	if !exists {
-		return fmt.Errorf("package '%s' not found in registry '%s'", packageName, registryName)
+		return fmt.Errorf("package '%s' not found in registry '%s'", config.packageName, config.registryName)
 	}
-	packageUUID = pkgInfo.UUID
-	packageGitURL = pkgInfo.GitURL
+	config.packageUUID = pkgInfo.UUID
+	config.packageGitURL = pkgInfo.GitURL
 
 	// Check if version is already registered
-	packageDir := filepath.Join(registriesDir, registryName, strings.ToUpper(string(packageName[0])), packageName)
-	versionsFile := filepath.Join(packageDir, "versions.json")
+	config.packageDir = filepath.Join(config.registriesDir, config.registryName, strings.ToUpper(string(config.packageName[0])), config.packageName)
+	versionsFile := filepath.Join(config.packageDir, "versions.json")
 	var existingVersions []string
 	if data, err := os.ReadFile(versionsFile); err == nil {
 		if err := json.Unmarshal(data, &existingVersions); err != nil {
-			return fmt.Errorf("failed to parse versions.json for package '%s': %v", packageName, err)
+			return fmt.Errorf("failed to parse versions.json for package '%s': %v", config.packageName, err)
 		}
-		if contains(existingVersions, versionTag) {
-			return fmt.Errorf("version '%s' of package '%s' is already registered in registry '%s'", versionTag, packageName, registryName)
+		if contains(existingVersions, config.versionTag) {
+			return fmt.Errorf("version '%s' of package '%s' is already registered in registry '%s'", config.versionTag, config.packageName, config.registryName)
 		}
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("failed to read versions.json for package '%s': %v", packageName, err)
+		return fmt.Errorf("failed to read versions.json for package '%s': %v", config.packageName, err)
 	}
 
 	// Check if package is cloned
-	clonePath := filepath.Join(cosmDir, "clones", packageUUID)
-	if _, err := os.Stat(clonePath); os.IsNotExist(err) {
-		tmpClonePath, err := clonePackageToTempDir(cosmDir, packageGitURL)
+	config.clonePath = filepath.Join(config.cosmDir, "clones", config.packageUUID)
+	if _, err := os.Stat(config.clonePath); os.IsNotExist(err) {
+		tmpClonePath, err := clonePackageToTempDir(config.cosmDir, config.packageGitURL)
 		if err != nil {
 			return err
 		}
 		defer cleanupTempClone(tmpClonePath)
-		clonePath, err = moveCloneToPermanentDir(cosmDir, tmpClonePath, packageUUID)
+		config.clonePath, err = moveCloneToPermanentDir(config.cosmDir, tmpClonePath, config.packageUUID)
 		if err != nil {
 			return err
 		}
 	} else if err != nil {
-		return fmt.Errorf("failed to check clone at %s: %v", clonePath, err)
+		return fmt.Errorf("failed to check clone at %s: %v", config.clonePath, err)
 	}
 
-	// Update versions for the specific tag, handling checkout
-	if err := updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL, []string{versionTag}, registriesDir, clonePath); err != nil {
+	// Update versions for the specific tag
+	if err := updatePackageVersions(config.packageDir, config.packageName, config.packageUUID, config.packageGitURL, []string{config.versionTag}, config.registriesDir, config.clonePath); err != nil {
 		return err
 	}
 
 	// Commit and push registry changes
-	commitMsg := fmt.Sprintf("Added version %s of package %s", versionTag, packageName)
-	if err := commitAndPushRegistryChanges(registriesDir, registryName, commitMsg); err != nil {
+	commitMsg := fmt.Sprintf("Added version %s of package %s", config.versionTag, config.packageName)
+	if err := commitAndPushRegistryChanges(config.registriesDir, config.registryName, commitMsg); err != nil {
 		return err
 	}
 
-	fmt.Printf("Added version '%s' of package '%s' to registry '%s'\n", versionTag, packageName, registryName)
+	fmt.Printf("Added version '%s' of package '%s' to registry '%s'\n", config.versionTag, config.packageName, config.registryName)
 	return nil
 }
 
-// parseArgsAndSetup validates arguments and sets up directories
-func parseArgsAndSetup(args []string) (registryName, packageName, versionTag, packageGitURL, cosmDir, registriesDir string, err error) {
-	if len(args) != 2 && len(args) != 3 {
-		return "", "", "", "", "", "", fmt.Errorf("requires two arguments (registry name, package giturl) or three arguments (registry name, package name, version)")
-	}
-	registryName = args[0]
-	if registryName == "" {
-		return "", "", "", "", "", "", fmt.Errorf("registry name must not be empty")
-	}
-	cosmDir, err = getCosmDir()
+// saveRegistryMetadata marshals and writes the registry metadata to registry.json
+func saveRegistryMetadata(registry types.Registry, filename string) error {
+	data, err := json.MarshalIndent(registry, "", "  ")
 	if err != nil {
-		return "", "", "", "", "", "", err
+		return fmt.Errorf("failed to marshal registry.json: %v", err)
 	}
-	registriesDir = filepath.Join(cosmDir, "registries")
-	if len(args) == 2 {
-		packageGitURL = args[1]
-		if packageGitURL == "" {
-			return "", "", "", "", "", "", fmt.Errorf("package giturl must not be empty")
-		}
-		return registryName, "", "", packageGitURL, cosmDir, registriesDir, nil
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("failed to write registry.json: %v", filename, err)
 	}
-	packageName = args[1]
-	versionTag = args[2]
-	if packageName == "" {
-		return "", "", "", "", "", "", fmt.Errorf("package name must not be empty")
-	}
-	if versionTag == "" || !strings.HasPrefix(versionTag, "v") {
-		return "", "", "", "", "", "", fmt.Errorf("version must be non-empty and start with 'v'")
-	}
-	return registryName, packageName, versionTag, "", cosmDir, registriesDir, nil
+	return nil
 }
 
 // ensurePackageNotRegistered checks if the package is already in the registry
@@ -240,13 +265,13 @@ func moveCloneToPermanentDir(cosmDir, tmpClonePath, packageUUID string) (string,
 }
 
 // validateAndCollectVersionTags fetches Git tags, or returns empty slice if none exist
-func validateAndCollectVersionTags(packageGitURL string, packageVersion string) ([]string, error) {
-	tagOutput, err := exec.Command("git", "tag").CombinedOutput()
-	if err != nil || len(strings.TrimSpace(string(tagOutput))) == 0 {
+func validateAndCollectVersionTags(clonePath string) ([]string, error) {
+	tagOutput, err := gitCommand(clonePath, "tag")
+	if err != nil || len(strings.TrimSpace(tagOutput)) == 0 {
 		return []string{}, nil // No tags, return empty slice
 	}
 
-	tags := strings.Split(strings.TrimSpace(string(tagOutput)), "\n")
+	tags := strings.Split(strings.TrimSpace(tagOutput), "\n")
 	var validTags []string
 	for _, tag := range tags {
 		if strings.HasPrefix(tag, "v") && len(strings.Split(tag, ".")) >= 2 {
@@ -281,40 +306,38 @@ func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL s
 	// Process each tag
 	for _, tag := range tags {
 		if !contains(versions, tag) {
-
 			// Fetch latest changes from remote to ensure tag commits are available
-			fetchCmd := exec.Command("git", "fetch", "origin")
-			fetchCmd.Dir = clonePath
-			if fetchOutput, err := fetchCmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to fetch remote changes for package '%s': %v\nOutput: %s", packageName, err, fetchOutput)
+			if err := fetchOrigin(clonePath); err != nil {
+				return fmt.Errorf("failed to fetch remote changes for package '%s': %v", packageName, err)
 			}
 
 			// Checkout the specific version tag
-			checkoutCmd := exec.Command("git", "checkout", tag)
-			checkoutCmd.Dir = clonePath
-			if checkoutOutput, err := checkoutCmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to checkout tag '%s' for package '%s': %v\nOutput: %s", tag, packageName, err, checkoutOutput)
+			if err := checkoutVersion(clonePath, tag); err != nil {
+				return fmt.Errorf("failed to checkout tag '%s' for package '%s': %v", tag, packageName, err)
 			}
 
 			// Load Project.json for this tag
 			project, err := loadProjectFromDir(clonePath)
-			validateProject(project)
-
-			// Next process possible error in validating project file
 			if err != nil {
 				return fmt.Errorf("failed to load Project.json for tag '%s': %v", tag, err)
 			}
 
-			// first revert back to HEAD
-			if revertErr := revertClone(clonePath); revertErr != nil {
-				return fmt.Errorf("failed to add package version '%s': %v; revert failed: %v", tag, err, revertErr)
+			// Validate project file
+			if err := validateProject(project); err != nil {
+				return fmt.Errorf("invalid Project.json for tag '%s': %v", tag, err)
 			}
 
-			sha1, err := getSHA1FromTaggedVersion(clonePath, tag)
-			// error in retreiving sha1 for tagged version
-			if err != nil {
-				return fmt.Errorf("failed to get sha1 commit hash for tag '%s': %v", tag, err)
+			// Revert clone to previous state
+			if err := revertClone(clonePath); err != nil {
+				return fmt.Errorf("failed to revert clone for tag '%s': %v", tag, err)
 			}
+
+			// Get SHA1 for the tag
+			sha1Output, err := gitCommand(clonePath, "rev-list", "-n", "1", tag)
+			if err != nil {
+				return fmt.Errorf("failed to get SHA1 for tag '%s': %v", tag, err)
+			}
+			sha1 := strings.TrimSpace(sha1Output)
 
 			// Add the version using the project data for this tag
 			if err := addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, sha1, tag, project, registriesDir); err != nil {
@@ -335,57 +358,6 @@ func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL s
 	}
 
 	return nil
-}
-
-// cleanupRegistryAdd reverts to the original directory and removes tmpClonePath
-func cleanupRegistryAdd(originalDir, tmpClonePath string) {
-	if err := os.Chdir(originalDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to return to original directory %s: %v\n", originalDir, err)
-	}
-	if tmpClonePath != "" {
-		if err := os.RemoveAll(tmpClonePath); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to clean up temporary clone directory %s: %v\n", tmpClonePath, err)
-		}
-	}
-}
-
-// restoreRegistryAddDir returns to the original directory
-func restoreRegistryAddDir(originalDir string) error {
-	if err := os.Chdir(originalDir); err != nil {
-		return fmt.Errorf("failed to return to original directory %s: %v", originalDir, err)
-	}
-	return nil
-}
-
-// enterCloneDir changes to the temporary clone directory
-func enterCloneDir(tmpClonePath string) error {
-	if err := os.Chdir(tmpClonePath); err != nil {
-		cleanupErr := cleanupTempClone(tmpClonePath)
-		if cleanupErr != nil {
-			return fmt.Errorf("failed to change to cloned directory %s: %v; cleanup failed: %v", tmpClonePath, err, cleanupErr)
-		}
-		return fmt.Errorf("failed to change to cloned directory %s: %v", tmpClonePath, err)
-	}
-	return nil
-}
-
-// cleanupTempClone removes the temporary clone directory
-func cleanupTempClone(tmpClonePath string) error {
-	if err := os.RemoveAll(tmpClonePath); err != nil {
-		return fmt.Errorf("failed to clean up temporary clone directory %s: %v", tmpClonePath, err)
-	}
-	return nil
-}
-
-func getSHA1FromTaggedVersion(packageDir, versionTag string) (string, error) {
-	getsha1Cmd := exec.Command("git", "rev-list", "-n", "1", versionTag)
-	getsha1Cmd.Dir = packageDir
-	sha1Output, err := getsha1Cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get SHA1 for tag '%s': %v", versionTag, err)
-	}
-	sha1 := strings.TrimSpace(string(sha1Output))
-	return sha1, nil
 }
 
 // addPackageVersion adds a single version to the registry package directory
@@ -423,6 +395,16 @@ func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, sha1
 	buildListFile := filepath.Join(versionDir, "buildlist.json")
 	if err := os.WriteFile(buildListFile, data, 0644); err != nil {
 		return fmt.Errorf("failed to write buildlist.json for version '%s': %v", versionTag, err)
+	}
+	return nil
+}
+
+// cleanupTempClone removes the temporary clone directory
+func cleanupTempClone(tmpClonePath string) error {
+	if tmpClonePath != "" {
+		if err := os.RemoveAll(tmpClonePath); err != nil {
+			return fmt.Errorf("failed to clean up temporary clone directory %s: %v", tmpClonePath, err)
+		}
 	}
 	return nil
 }
