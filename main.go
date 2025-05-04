@@ -150,7 +150,9 @@ func main() {
 	var registryCmd = &cobra.Command{
 		Use:   "registry",
 		Short: "Manage package registries",
-		Run:   commands.Registry,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println("Registry command requires a subcommand (e.g., 'status', 'init').")
+		},
 	}
 
 	var registryStatusCmd = &cobra.Command{

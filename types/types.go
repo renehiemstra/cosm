@@ -6,6 +6,12 @@ type PackageInfo struct {
 	GitURL string `json:"giturl"`
 }
 
+// packageLocation represents a package found in a registry
+type PackageLocation struct {
+	RegistryName string
+	Specs        Specs
+}
+
 // Registry represents a package registry
 type Registry struct {
 	Name     string                 `json:"name"`
