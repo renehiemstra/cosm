@@ -94,7 +94,6 @@ func RegistryAdd(cmd *cobra.Command, args []string) error {
 
 	var packageUUID string
 	var tags []string
-	var project types.Project
 	var tmpClonePath, currentDir string
 	if len(args) == 2 {
 		// Mode 1: Add package with all versions
@@ -111,7 +110,19 @@ func RegistryAdd(cmd *cobra.Command, args []string) error {
 			cleanupRegistryAdd(currentDir, tmpClonePath)
 			return err
 		}
-		project, err = validateProjectFile(packageGitURL)
+		// Fetch tags to ensure latest tags are available
+		fetchCmd := exec.Command("git", "fetch", "--tags")
+		if fetchOutput, err := fetchCmd.CombinedOutput(); err != nil {
+			cleanupRegistryAdd(currentDir, tmpClonePath)
+			return fmt.Errorf("failed to fetch tags for repository at '%s': %v\nOutput: %s", packageGitURL, err, fetchOutput)
+		}
+		// Validate Project.json to get package name and UUID
+		project, err := loadProjectFile(tmpClonePath)
+		if err != nil {
+			cleanupRegistryAdd(currentDir, tmpClonePath)
+			return err
+		}
+		err = validateProject(project)
 		if err != nil {
 			cleanupRegistryAdd(currentDir, tmpClonePath)
 			return err
@@ -133,11 +144,13 @@ func RegistryAdd(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if len(tags) > 0 {
-			if err := updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL, tags, project, registriesDir); err != nil {
+			// Update versions for all tags, handling checkout
+			if err := updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL, tags, registriesDir, tmpClonePath); err != nil {
 				cleanupRegistryAdd(currentDir, tmpClonePath)
 				return err
 			}
 		}
+
 		// Update registry.json and move clone
 		registry.Packages[packageName] = types.PackageInfo{
 			UUID:   packageUUID,
@@ -213,35 +226,8 @@ func RegistryAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to check clone at %s: %v", clonePath, err)
 	}
 
-	// Fetch tags to ensure latest tags are available
-	currentDir, err = os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get current directory: %v", err)
-	}
-	if err := os.Chdir(clonePath); err != nil {
-		return fmt.Errorf("failed to change to clone directory %s: %v", clonePath, err)
-	}
-	defer os.Chdir(currentDir)
-	fetchCmd := exec.Command("git", "fetch", "--tags")
-	if fetchOutput, err := fetchCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to fetch tags for repository at '%s': %v\nOutput: %s", packageGitURL, err, fetchOutput)
-	}
-
-	// Verify version is tagged
-	tagCmd := exec.Command("git", "tag", "-l", versionTag)
-	tagOutput, err := tagCmd.CombinedOutput()
-	if err != nil || strings.TrimSpace(string(tagOutput)) != versionTag {
-		return fmt.Errorf("version '%s' is not a tagged release in repository at '%s'", versionTag, packageGitURL)
-	}
-
-	// Load Project.json for specs metadata
-	project, err = validateProjectFile(packageGitURL)
-	if err != nil {
-		return err
-	}
-
-	// Add version to registry
-	if err := updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL, []string{versionTag}, project, registriesDir); err != nil {
+	// Update versions for the specific tag, handling checkout
+	if err := updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL, []string{versionTag}, registriesDir, clonePath); err != nil {
 		return err
 	}
 
@@ -683,49 +669,26 @@ func commitAndPushRegistryChanges(registriesDir, registryName, commitMsg string)
 	return nil
 }
 
-// cleanupCommit reverts to the original directory
-func cleanupCommit(originalDir string) {
-	if err := os.Chdir(originalDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to return to original directory %s: %v\n", originalDir, err)
-	}
-}
-
-// restoreCommitDir returns to the original directory
-func restoreCommitDir(originalDir string) error {
-	if err := os.Chdir(originalDir); err != nil {
-		return fmt.Errorf("failed to return to original directory %s: %v", originalDir, err)
-	}
-	return nil
-}
-
-// validateProjectFile reads and validates Project.json, returning the project
-func validateProjectFile(packageGitURL string) (types.Project, error) {
-	data, err := os.ReadFile("Project.json")
-	if err != nil {
-		return types.Project{}, fmt.Errorf("repository at '%s' does not contain a Project.json file: %v", packageGitURL, err)
-	}
-	var project types.Project
-	if err := json.Unmarshal(data, &project); err != nil {
-		return types.Project{}, fmt.Errorf("invalid Project.json in repository at '%s': %v", packageGitURL, err)
-	}
+// validateProject validates a project struct for registry operations
+func validateProject(project types.Project) error {
 	if project.Name == "" {
-		return types.Project{}, fmt.Errorf("Project.json in repository at '%s' does not contain a valid package name", packageGitURL)
+		return fmt.Errorf("Project.json  does not contain a valid package name")
 	}
 	if project.UUID == "" {
-		return types.Project{}, fmt.Errorf("Project.json in repository at '%s' does not contain a valid UUID", packageGitURL)
+		return fmt.Errorf("Project.json does not contain a valid UUID")
 	}
 	if _, err := uuid.Parse(project.UUID); err != nil {
-		return types.Project{}, fmt.Errorf("invalid UUID '%s' in Project.json at '%s': %v", project.UUID, packageGitURL, err)
+		return fmt.Errorf("invalid UUID '%s' in Project.json: %v", project.UUID, err)
 	}
 	if project.Version == "" {
-		return types.Project{}, fmt.Errorf("Project.json at '%s' does not contain a version", packageGitURL)
+		return fmt.Errorf("Project.json does not contain a version")
 	}
 	// Validate version parsing
-	_, err = ParseSemVer(project.Version) // Fixed to handle both return values
+	_, err := ParseSemVer(project.Version)
 	if err != nil {
-		return types.Project{}, fmt.Errorf("invalid version in Project.json at '%s': %v", packageGitURL, err)
+		return fmt.Errorf("invalid version in Project.json: %v", err)
 	}
-	return project, nil
+	return nil
 }
 
 // validateAndCollectVersionTags fetches Git tags, or returns empty slice if none exist
@@ -755,18 +718,23 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
+func getSHA1FromTaggedVersion(packageDir, versionTag string) (string, error) {
+	getsha1Cmd := exec.Command("git", "rev-list", "-n", "1", versionTag)
+	getsha1Cmd.Dir = packageDir
+	sha1Output, err := getsha1Cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get SHA1 for tag '%s': %v", versionTag, err)
+	}
+	sha1 := strings.TrimSpace(string(sha1Output))
+	return sha1, nil
+}
+
 // addPackageVersion adds a single version to the package directory
-func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, versionTag string, project types.Project, registriesDir string) error {
+func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, sha1, versionTag string, project types.Project, registriesDir string) error {
 	versionDir := filepath.Join(packageDir, versionTag)
 	if err := os.MkdirAll(versionDir, 0755); err != nil {
 		return fmt.Errorf("failed to create version directory %s: %v", versionDir, err)
 	}
-
-	sha1Output, err := exec.Command("git", "rev-list", "-n", "1", versionTag).Output()
-	if err != nil {
-		return fmt.Errorf("failed to get SHA1 for tag '%s': %v", versionTag, err)
-	}
-	sha1 := strings.TrimSpace(string(sha1Output))
 
 	specs := types.Specs{
 		Name:    packageName,
@@ -1153,7 +1121,7 @@ func setupPackageDir(registriesDir, registryName, packageName string) (string, e
 }
 
 // updatePackageVersions updates versions.json with the specified tags
-func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL string, tags []string, project types.Project, registriesDir string) error {
+func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL string, tags []string, registriesDir, clonePath string) error {
 	versionsFile := filepath.Join(packageDir, "versions.json")
 	var versions []string
 	if data, err := os.ReadFile(versionsFile); err == nil {
@@ -1163,14 +1131,55 @@ func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL s
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("failed to read versions.json for package '%s': %v", packageName, err)
 	}
+
+	// Process each tag
 	for _, tag := range tags {
 		if !contains(versions, tag) {
-			versions = append(versions, tag)
-			if err := addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, tag, project, registriesDir); err != nil {
+
+			// Fetch latest changes from remote to ensure tag commits are available
+			fetchCmd := exec.Command("git", "fetch", "origin")
+			fetchCmd.Dir = clonePath
+			if fetchOutput, err := fetchCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to fetch remote changes for package '%s': %v\nOutput: %s", packageName, err, fetchOutput)
+			}
+
+			// Checkout the specific version tag
+			checkoutCmd := exec.Command("git", "checkout", tag)
+			checkoutCmd.Dir = clonePath
+			if checkoutOutput, err := checkoutCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to checkout tag '%s' for package '%s': %v\nOutput: %s", tag, packageName, err, checkoutOutput)
+			}
+
+			// Load Project.json for this tag
+			project, err := loadProjectFile(clonePath)
+			validateProject(project)
+
+			// Next process possible error in validating project file
+			if err != nil {
+				return fmt.Errorf("failed to load Project.json for tag '%s': %v", tag, err)
+			}
+
+			// first revert back to HEAD
+			if revertErr := revertClone(clonePath); revertErr != nil {
+				return fmt.Errorf("failed to add package version '%s': %v; revert failed: %v", tag, err, revertErr)
+			}
+
+			sha1, err := getSHA1FromTaggedVersion(clonePath, tag)
+			// error in retreiving sha1 for tagged version
+			if err != nil {
+				return fmt.Errorf("failed to get sha1 commit hash for tag '%s': %v", tag, err)
+			}
+
+			// Add the version using the project data for this tag
+			if err := addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, sha1, tag, project, registriesDir); err != nil {
 				return err
 			}
+
+			versions = append(versions, tag)
 		}
 	}
+
+	// Write updated versions.json
 	data, err := json.MarshalIndent(versions, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal versions.json for package '%s': %v", packageName, err)
@@ -1178,6 +1187,7 @@ func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL s
 	if err := os.WriteFile(versionsFile, data, 0644); err != nil {
 		return fmt.Errorf("failed to write versions.json for package '%s': %v", packageName, err)
 	}
+
 	return nil
 }
 
@@ -1232,146 +1242,6 @@ func updateSingleRegistry(registriesDir, registryName string) error {
 		return fmt.Errorf("failed to pull updates for registry '%s': %v\nOutput: %s", registryName, err, pullOutput)
 	}
 	if err := restorePullDir(currentDir); err != nil {
-		return err
-	}
-	return nil
-}
-
-// validateRmArgs validates the arguments for RegistryRm
-func validateRmArgs(args []string) (registryName, packageName, version string, err error) {
-	if len(args) < 2 || len(args) > 3 {
-		return "", "", "", fmt.Errorf("expected 2 or 3 arguments (e.g., cosm registry rm <registry_name> <package_name> [v<version>] [--force])")
-	}
-	registryName = args[0]
-	packageName = args[1]
-	if len(args) == 3 {
-		version = args[2]
-		if !strings.HasPrefix(version, "v") {
-			return "", "", "", fmt.Errorf("version '%s' must start with 'v'", version)
-		}
-	}
-	return registryName, packageName, version, nil
-}
-
-// confirmRemoval prompts the user for confirmation if --force is not set
-func confirmRemoval(registryName, packageName, version string) error {
-	prompt := fmt.Sprintf("Are you sure you want to remove package '%s' from registry '%s'?", packageName, registryName)
-	if version != "" {
-		prompt = fmt.Sprintf("Are you sure you want to remove version '%s' of package '%s' from registry '%s'?", version, packageName, registryName)
-	}
-	fmt.Printf("%s [y/N]: ", prompt)
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Scan()
-	response := strings.TrimSpace(strings.ToLower(scanner.Text()))
-	if response != "y" && response != "yes" {
-		fmt.Println("Package removal cancelled.")
-		return fmt.Errorf("operation cancelled by user")
-	}
-	return nil
-}
-
-// removePackageVersion removes a specific version or entire package from the registry
-func removePackageVersion(registriesDir, registryName, packageName, packageDir, version string, registry *types.Registry) error {
-	if version != "" {
-		versionsFile := filepath.Join(packageDir, "versions.json")
-		var versions []string
-		if data, err := os.ReadFile(versionsFile); err == nil {
-			if err := json.Unmarshal(data, &versions); err != nil {
-				return fmt.Errorf("failed to parse versions.json for package '%s': %v", packageName, err)
-			}
-		} else {
-			return fmt.Errorf("versions.json not found for package '%s' in registry '%s'", packageName, registryName)
-		}
-
-		// Check if version exists
-		var updatedVersions []string
-		found := false
-		for _, v := range versions {
-			if v == version {
-				found = true
-				continue
-			}
-			updatedVersions = append(updatedVersions, v)
-		}
-		if !found {
-			return fmt.Errorf("version '%s' not found for package '%s' in registry '%s'", version, packageName, registryName)
-		}
-
-		// Remove version directory
-		versionDir := filepath.Join(packageDir, version)
-		if err := os.RemoveAll(versionDir); err != nil {
-			return fmt.Errorf("failed to remove version directory '%s': %v", versionDir, err)
-		}
-
-		// Update versions.json
-		data, err := json.MarshalIndent(updatedVersions, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal versions.json for package '%s': %v", packageName, err)
-		}
-		if err := os.WriteFile(versionsFile, data, 0644); err != nil {
-			return fmt.Errorf("failed to write versions.json for package '%s': %v", packageName, err)
-		}
-
-		// If no versions remain, remove the entire package
-		if len(updatedVersions) == 0 {
-			delete(registry.Packages, packageName)
-			if err := os.RemoveAll(packageDir); err != nil {
-				return fmt.Errorf("failed to remove package directory '%s': %v", packageDir, err)
-			}
-		}
-	} else {
-		// Remove entire package
-		delete(registry.Packages, packageName)
-		if err := os.RemoveAll(packageDir); err != nil {
-			return fmt.Errorf("failed to remove package directory '%s': %v", packageDir, err)
-		}
-	}
-	return nil
-}
-
-// updateRegistryMetadata updates the registry.json file with the modified registry data
-func updateRegistryMetadata(registry types.Registry, registryMetaFile, registryName string) error {
-	data, err := json.MarshalIndent(registry, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry.json for '%s': %v", registryName, err)
-	}
-	if err := os.WriteFile(registryMetaFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write registry.json for '%s': %v", registryName, err)
-	}
-	return nil
-}
-
-// commitAndPushRemoval commits and pushes the removal changes to the remote repository
-func commitAndPushRemoval(registriesDir, registryName, packageName, version string) error {
-	currentDir, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get current directory: %v", err)
-	}
-	registryPath := filepath.Join(registriesDir, registryName)
-	if err := os.Chdir(registryPath); err != nil {
-		cleanupCommit(currentDir)
-		return fmt.Errorf("failed to change to registry directory '%s': %v", registryPath, err)
-	}
-	addCmd := exec.Command("git", "add", ".")
-	if addOutput, err := addCmd.CombinedOutput(); err != nil {
-		cleanupCommit(currentDir)
-		return fmt.Errorf("failed to stage registry changes: %v\nOutput: %s", err, addOutput)
-	}
-	commitMsg := fmt.Sprintf("Removed package '%s'", packageName)
-	if version != "" {
-		commitMsg = fmt.Sprintf("Removed version '%s' of package '%s'", version, packageName)
-	}
-	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
-	if commitOutput, err := commitCmd.CombinedOutput(); err != nil {
-		cleanupCommit(currentDir)
-		return fmt.Errorf("failed to commit registry changes: %v\nOutput: %s", err, commitOutput)
-	}
-	pushCmd := exec.Command("git", "push", "origin", "main")
-	if pushOutput, err := pushCmd.CombinedOutput(); err != nil {
-		cleanupCommit(currentDir)
-		return fmt.Errorf("failed to push registry changes: %v\nOutput: %s", err, pushOutput)
-	}
-	if err := restoreCommitDir(currentDir); err != nil {
 		return err
 	}
 	return nil

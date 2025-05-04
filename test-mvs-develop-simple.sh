@@ -70,76 +70,21 @@ runall(){
 
     # create packages
     add_pkg_with_git A
-    add_pkg_with_git B
-    add_pkg_with_git C
-    add_pkg_with_git D
-    add_pkg_with_git E
-    add_pkg_with_git F
-
-    # releases of E
-    cd $DEPOT_PATH/examples/E
-    cosm release v1.1.0
-    cosm release v1.2.0
-    cosm release v1.3.0
-    cosm registry add TestRegistry $DEPOT_PATH/localhub/E
-
-    # releases of F
-    cd $DEPOT_PATH/examples/F
-    cosm release v1.1.0
-    cosm registry add TestRegistry $DEPOT_PATH/localhub/F
-
-    # releases of D
-    cd $DEPOT_PATH/examples/D
-    cosm add E@v1.1.0
-    add_commit_push D
-    cosm release v1.1.0
-    cosm release v1.2.0
-    cosm rm E
-    cosm add E@v1.2.0
-    add_commit_push D
-    cosm release v1.3.0
-    cosm release v1.4.0
-    cosm registry add TestRegistry $DEPOT_PATH/localhub/D
-
-    # releases of B
-    cd $DEPOT_PATH/examples/B
-    cosm add D@v1.1.0
-    add_commit_push B
-    cosm release v1.1.0
-    cosm rm D
-    cosm add D@v1.3.0
-    add_commit_push B
-    cosm release v1.2.0
-    cosm registry add TestRegistry $DEPOT_PATH/localhub/B
-
-    # releases of C
-    cd $DEPOT_PATH/examples/C
-    cosm release v1.1.0
-    cosm add D@v1.4.0
-    add_commit_push C
-    cosm release v1.2.0
-    cosm rm D
-    cosm add F@v1.1.0
-    add_commit_push C
-    cosm release v1.3.0
-    cosm registry add TestRegistry $DEPOT_PATH/localhub/C
+    cosm registry add TestRegistry $DEPOT_PATH/localhub/A
 
     # releases of A
     cd $DEPOT_PATH/examples/A
-    cosm add B@v1.2.0
-    cosm add C@v1.2.0
-    add_commit_push A
-    cosm release v1.0.0
-    cosm registry add TestRegistry $DEPOT_PATH/localhub/A
+    cosm release v1.2.3
+    cosm release --patch    # v1.2.4
+    cosm release --minor    # v1.3.0
+    cosm release --major    # v2.0.0
+    
+    # add a single release
+    cosm registry add TestRegistry A v1.3.0
 }
 
 cleanall(){
     cleanup_pkg A
-    cleanup_pkg B
-    cleanup_pkg C
-    cleanup_pkg D
-    cleanup_pkg E
-    cleanup_pkg F
     cleanup_reg TestRegistry
     rm -rf $DEPOT_PATH/clones/*
     rm -rf $DEPOT_PATH/packages/*

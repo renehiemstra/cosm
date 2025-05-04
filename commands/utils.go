@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"cosm/types"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -124,4 +126,21 @@ func GetMajorVersion(version string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("v%d", s.Major), nil
+}
+
+// loadProjectFile loads and parses Project.json from the specified directory
+func loadProjectFile(dir string) (types.Project, error) {
+	projectFile := filepath.Join(dir, "Project.json")
+	data, err := os.ReadFile(projectFile)
+	if err != nil {
+		return types.Project{}, fmt.Errorf("failed to read Project.json at %s: %v", projectFile, err)
+	}
+	var project types.Project
+	if err := json.Unmarshal(data, &project); err != nil {
+		return types.Project{}, fmt.Errorf("failed to parse Project.json at %s: %v", projectFile, err)
+	}
+	if project.Deps == nil {
+		project.Deps = make(map[string]string)
+	}
+	return project, nil
 }

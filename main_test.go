@@ -436,12 +436,12 @@ func TestRegistryAddSingle(t *testing.T) {
 	}
 
 	// Execute releases
-	releasePackage(t, packageDir, "v1.2.4")
+	releasePackage(t, packageDir, "v1.2.3")
 	releasePackage(t, packageDir, "--patch")
 	releasePackage(t, packageDir, "--minor")
 	releasePackage(t, packageDir, "--major")
 
-	// Add a single version
+	// // Add a single version
 	newVersion := "v1.3.0"
 	_, stderr, err := runCommand(t, tempDir, "registry", "add", registryName, packageName, newVersion)
 	if err != nil {
@@ -649,23 +649,41 @@ func TestMinimalVersionSelectionBuildList(t *testing.T) {
 	// Verify build list
 	buildListFile := filepath.Join(packageDir, ".cosm", "buildlist.json")
 	buildList := loadBuildList(t, buildListFile)
+
+	// Define expected dependencies
 	expectedDeps := map[string]string{
 		"B": "v1.2.0",
 		"C": "v1.2.0",
 		"D": "v1.4.0",
 		"E": "v1.2.0",
 	}
+
+	// Verify the number of dependencies
 	if len(buildList.Dependencies) != len(expectedDeps) {
 		t.Errorf("Expected %d dependencies, got %d: %v", len(expectedDeps), len(buildList.Dependencies), buildList.Dependencies)
 	}
+
+	// Verify each expected dependency
 	for name, expectedVersion := range expectedDeps {
-		dep, exists := buildList.Dependencies[fmt.Sprintf("%s@v1", buildList.Dependencies[name].UUID)]
-		if !exists {
-			t.Errorf("Dependency %s not found in build list", name)
-			continue
+		found := false
+		for key, dep := range buildList.Dependencies {
+			if dep.Name == name && dep.Version == expectedVersion {
+				found = true
+				// Verify other fields
+				if dep.UUID == "" {
+					t.Errorf("Dependency %s@%s has empty UUID in key %s", name, expectedVersion, key)
+				}
+				if dep.GitURL == "" {
+					t.Errorf("Dependency %s@%s has empty GitURL in key %s", name, expectedVersion, key)
+				}
+				if dep.SHA1 == "" {
+					t.Errorf("Dependency %s@%s has empty SHA1 in key %s", name, expectedVersion, key)
+				}
+				break
+			}
 		}
-		if dep.Name != name || dep.Version != expectedVersion {
-			t.Errorf("Expected %s:%s, got %s:%s", name, expectedVersion, dep.Name, dep.Version)
+		if !found {
+			t.Errorf("Expected dependency %s:%s not found in build list", name, expectedVersion)
 		}
 	}
 }
