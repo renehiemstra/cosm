@@ -128,6 +128,19 @@ func saveProject(project *types.Project, filename string) error {
 	return nil
 }
 
+// saveRegistryNames marshals and writes the list of registry names to registries.json
+func saveRegistryNames(registryNames []string, registriesDir string) error {
+	data, err := json.MarshalIndent(registryNames, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal registries.json: %v", err)
+	}
+	registriesFile := filepath.Join(registriesDir, "registries.json")
+	if err := os.WriteFile(registriesFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write registries.json: %v", err)
+	}
+	return nil
+}
+
 // loadSpecs loads a package's specs from specs.json
 func loadSpecs(registriesDir, registryName, packageName, version string) (types.Specs, error) {
 	specsFile := filepath.Join(registriesDir, registryName, strings.ToUpper(string(packageName[0])), packageName, version, "specs.json")
