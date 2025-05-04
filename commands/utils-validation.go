@@ -8,7 +8,7 @@ import (
 )
 
 // validateProject validates a project struct for registry operations
-func validateProject(project types.Project) error {
+func validateProject(project *types.Project) error {
 	if project.Name == "" {
 		return fmt.Errorf("Project.json  does not contain a valid package name")
 	}

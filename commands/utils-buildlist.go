@@ -11,7 +11,7 @@ import (
 // generateBuildList creates a build list using Minimum Version Selection (MVS),
 // including direct dependencies from project.Deps and transitive dependencies
 // from dependency build lists, taking the maximum version for shared dependencies.
-func generateBuildList(project types.Project, registriesDir string) (types.BuildList, error) {
+func generateBuildList(project *types.Project, registriesDir string) (types.BuildList, error) {
 	buildList := types.BuildList{Dependencies: make(map[string]types.BuildListDependency)}
 
 	// Process direct dependencies

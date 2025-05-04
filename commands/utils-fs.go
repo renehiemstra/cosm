@@ -92,35 +92,18 @@ func ensureProjectFileDoesNotExist(projectFile string) error {
 	return nil
 }
 
-// loadProjectFile loads and parses Project.json from the specified directory
-func loadProjectFile(dir string) (types.Project, error) {
-	projectFile := filepath.Join(dir, "Project.json")
-	data, err := os.ReadFile(projectFile)
+// loadProject loads and parses Project.json from the specified file path.
+func loadProject(filename string) (*types.Project, error) {
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		return nil, fmt.Errorf("no Project.json found at %s", filename)
+	}
+	data, err := os.ReadFile(filename)
 	if err != nil {
-		return types.Project{}, fmt.Errorf("failed to read Project.json at %s: %v", projectFile, err)
+		return nil, fmt.Errorf("failed to read Project.json at %s: %v", filename, err)
 	}
 	var project types.Project
 	if err := json.Unmarshal(data, &project); err != nil {
-		return types.Project{}, fmt.Errorf("failed to parse Project.json at %s: %v", projectFile, err)
-	}
-	if project.Deps == nil {
-		project.Deps = make(map[string]string)
-	}
-	return project, nil
-}
-
-// loadProject reads and parses the Project.json file
-func loadProject(projectFile string) (*types.Project, error) {
-	if _, err := os.Stat(projectFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("no Project.json found in current directory")
-	}
-	data, err := os.ReadFile(projectFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read Project.json: %v", err)
-	}
-	var project types.Project
-	if err := json.Unmarshal(data, &project); err != nil {
-		return nil, fmt.Errorf("failed to parse Project.json: %v", err)
+		return nil, fmt.Errorf("failed to parse Project.json at %s: %v", filename, err)
 	}
 	if project.Deps == nil {
 		project.Deps = make(map[string]string)
@@ -128,19 +111,19 @@ func loadProject(projectFile string) (*types.Project, error) {
 	return &project, nil
 }
 
-// marshalProject converts the project struct to JSON
-func marshalProject(project types.Project) ([]byte, error) {
-	data, err := json.MarshalIndent(project, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal Project.json: %v", err) // Return error
-	}
-	return data, nil
+// loadProjectFromDir loads and parses Project.json from the specified directory.
+func loadProjectFromDir(dir string) (*types.Project, error) {
+	return loadProject(filepath.Join(dir, "Project.json"))
 }
 
-// writeProjectFile writes the project data to Project.json
-func writeProjectFile(projectFile string, data []byte) error {
-	if err := os.WriteFile(projectFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write Project.json: %v", err) // Return error
+// saveProject marshals the project to JSON and writes it to Project.json
+func saveProject(project *types.Project, filename string) error {
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal %s: %v", filename, err)
+	}
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("failed to write %s: %v", filename, err)
 	}
 	return nil
 }

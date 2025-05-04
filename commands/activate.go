@@ -79,7 +79,7 @@ func needsBuildListGeneration(projectStat os.FileInfo) (bool, error) {
 
 // generateLocalBuildList computes and writes the build list to .cosm/buildlist.json
 func generateLocalBuildList(project *types.Project, registriesDir string) error {
-	buildList, err := generateBuildList(*project, registriesDir)
+	buildList, err := generateBuildList(project, registriesDir)
 	if err != nil {
 		return fmt.Errorf("failed to generate build list for %s: %v", project.Name, err)
 	}

@@ -51,7 +51,7 @@ func RegistryAdd(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to fetch tags for repository at '%s': %v\nOutput: %s", packageGitURL, err, fetchOutput)
 		}
 		// Validate Project.json to get package name and UUID
-		project, err := loadProjectFile(tmpClonePath)
+		project, err := loadProjectFromDir(tmpClonePath)
 		if err != nil {
 			cleanupRegistryAdd(currentDir, tmpClonePath)
 			return err
@@ -297,7 +297,7 @@ func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL s
 			}
 
 			// Load Project.json for this tag
-			project, err := loadProjectFile(clonePath)
+			project, err := loadProjectFromDir(clonePath)
 			validateProject(project)
 
 			// Next process possible error in validating project file
@@ -389,7 +389,7 @@ func getSHA1FromTaggedVersion(packageDir, versionTag string) (string, error) {
 }
 
 // addPackageVersion adds a single version to the registry package directory
-func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, sha1, versionTag string, project types.Project, registriesDir string) error {
+func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, sha1, versionTag string, project *types.Project, registriesDir string) error {
 	versionDir := filepath.Join(packageDir, versionTag)
 	if err := os.MkdirAll(versionDir, 0755); err != nil {
 		return fmt.Errorf("failed to create version directory %s: %v", versionDir, err)

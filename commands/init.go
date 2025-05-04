@@ -28,11 +28,7 @@ func Init(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	project := createProject(packageName, projectUUID, authors, language, version)
-	data, err := marshalProject(project)
-	if err != nil {
-		return err
-	}
-	if err := writeProjectFile("Project.json", data); err != nil {
+	if err := saveProject(&project, "Project.json"); err != nil {
 		return err
 	}
 	fmt.Printf("Initialized project '%s' with version %s\n", packageName, version)

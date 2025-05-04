@@ -2,9 +2,7 @@ package commands
 
 import (
 	"cosm/types"
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -58,19 +56,22 @@ func parseAddArgs(args []string) (string, string, error) {
 	return packageName, versionTag, nil
 }
 
-// updateProjectWithDependency adds the dependency and saves the updated project
-func updateProjectWithDependency(project *types.Project, packageName, versionTag string, registryName string) error {
+// updateDependency adds a dependency to the project's Deps map
+func updateDependency(project *types.Project, packageName, versionTag string) error {
 	if _, exists := project.Deps[packageName]; exists {
 		return fmt.Errorf("dependency '%s' already exists in project", packageName)
 	}
 	project.Deps[packageName] = versionTag
+	return nil
+}
 
-	data, err := json.MarshalIndent(project, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal Project.json: %v", err)
+// updateProjectWithDependency adds the dependency and saves the updated project
+func updateProjectWithDependency(project *types.Project, packageName, versionTag string, registryName string) error {
+	if err := updateDependency(project, packageName, versionTag); err != nil {
+		return err
 	}
-	if err := os.WriteFile("Project.json", data, 0644); err != nil {
-		return fmt.Errorf("failed to write Project.json: %v", err)
+	if err := saveProject(project, "Project.json"); err != nil {
+		return err
 	}
 	fmt.Printf("Added dependency '%s' %s from registry '%s' to project\n", packageName, versionTag, registryName)
 	return nil
