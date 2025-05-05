@@ -86,3 +86,35 @@ func GetMajorVersion(version string) (string, error) {
 	}
 	return fmt.Sprintf("v%d", s.Major), nil
 }
+
+// validateNewVersion ensures the new version is valid and allowed
+func validateNewVersion(newVersion, currentVersion string) error {
+	// Parse versions
+	currVer, err := ParseSemVer(currentVersion)
+	if err != nil {
+		return fmt.Errorf("invalid current version %q: %v", currentVersion, err)
+	}
+	newVer, err := ParseSemVer(newVersion)
+	if err != nil {
+		return fmt.Errorf("invalid new version %q: %v", newVersion, err)
+	}
+
+	// Allow same version if not tagged, otherwise require newer
+	if newVersion == currentVersion {
+		return nil // Tag existence checked later by ensureTagDoesNotExist
+	}
+
+	// Compare versions: newVer must be greater than currVer
+	if newVer.Major < currVer.Major {
+		return fmt.Errorf("new version %q must be greater than current version %q", newVersion, currentVersion)
+	}
+	if newVer.Major == currVer.Major {
+		if newVer.Minor < currVer.Minor {
+			return fmt.Errorf("new version %q must be greater than current version %q", newVersion, currentVersion)
+		}
+		if newVer.Minor == currVer.Minor && newVer.Patch <= currVer.Patch {
+			return fmt.Errorf("new version %q must be greater than current version %q", newVersion, currentVersion)
+		}
+	}
+	return nil
+}

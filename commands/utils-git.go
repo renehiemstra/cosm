@@ -8,16 +8,28 @@ import (
 	"strings"
 )
 
-// getCurrentBranch retrieves the current branch name for the repository in the specified directory.
+// getCurrentBranch retrieves the current branch name of the Git repository in the specified directory
 func getCurrentBranch(dir string) (string, error) {
-	branch, err := gitCommand(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	output, err := gitCommand(dir, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		return "", fmt.Errorf("failed to determine current branch in %s: %v", dir, err)
+		return "", wrapGitError(dir, fmt.Sprintf("failed to get current branch in %s", dir), err)
+	}
+	branch := strings.TrimSpace(output)
+	if branch == "HEAD" {
+		return "", fmt.Errorf("repository in %s is in a detached HEAD state", dir)
 	}
 	if branch == "" {
-		return "", fmt.Errorf("no current branch detected in %s", dir)
+		return "", fmt.Errorf("no branch detected in %s", dir)
 	}
 	return branch, nil
+}
+
+// pullFromBranch pulls updates from the specified branch in the Git repository
+func pullFromBranch(dir, branch, context string) error {
+	if _, err := gitCommand(dir, "pull", "origin", branch); err != nil {
+		return wrapGitError(dir, fmt.Sprintf("failed to pull updates from branch '%s' for %s", branch, context), err)
+	}
+	return nil
 }
 
 // wrapGitError wraps a Git command error with directory context.
@@ -146,29 +158,6 @@ func checkoutVersion(clonePath, sha1 string) error {
 		return fmt.Errorf("failed to checkout SHA1 %s in %s: %v", sha1, clonePath, err)
 	}
 	return nil
-}
-
-// publishToGitRemote tags and pushes the release to the remote repository
-func publishToGitRemote(projectDir, version string) error {
-	// Tag the version
-	_, err := gitCommand(projectDir, "tag", version)
-	if err != nil {
-		return wrapGitError(projectDir, fmt.Sprintf("failed to tag version %q", version), err)
-	}
-
-	// Get the current branch
-	branch, err := getCurrentBranch(projectDir)
-	if err != nil {
-		return err
-	}
-
-	// Push to the current branch
-	if err := pushToRemote(projectDir, branch, true); err != nil {
-		return err
-	}
-
-	// Push the tag
-	return pushToRemote(projectDir, version, false)
 }
 
 // ensureNoUncommittedChanges checks for uncommitted changes in the Git repo

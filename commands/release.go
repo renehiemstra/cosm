@@ -2,168 +2,197 @@ package commands
 
 import (
 	"cosm/types"
-	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
 
-// Release updates the project version and publishes it to the remote repository and registries
+// releaseConfig holds configuration for releasing a new project version
+type releaseConfig struct {
+	projectDir  string
+	project     *types.Project
+	newVersion  string
+	patch       bool
+	minor       bool
+	major       bool
+	projectFile string
+}
+
+// Release updates the project version and publishes it to the remote repository
 func Release(cmd *cobra.Command, args []string) error {
-	projectDir, err := os.Getwd()
+	// Parse arguments and initialize config
+	config, err := parseReleaseArgs(cmd, args)
 	if err != nil {
 		return err
 	}
-	project, err := loadProject("Project.json")
-	if err != nil {
+
+	// Validate repository state
+	if err := validateRepositoryState(config); err != nil {
 		return err
 	}
-	if err := ensureNoUncommittedChanges(projectDir); err != nil {
+
+	// Validate new version
+	if err := validateReleaseVersion(config); err != nil {
 		return err
 	}
-	if err := ensureLocalRepoInSyncWithOrigin(projectDir); err != nil {
+
+	// Update project version and commit
+	if err := updateProjectVersion(config); err != nil {
 		return err
 	}
-	newVersion, err := determineNewVersion(cmd, args, project.Version)
-	if err != nil {
+
+	// Publish to Git remote
+	if err := publishToGitRemote(config); err != nil {
 		return err
 	}
-	if err := validateNewVersion(newVersion, project.Version); err != nil {
-		return err
-	}
-	if err := ensureTagDoesNotExist(newVersion); err != nil {
-		return err
-	}
-	if err := updateProjectVersion(project, newVersion); err != nil {
-		return err
-	}
-	if err := publishToGitRemote(projectDir, newVersion); err != nil {
-		return err
-	}
-	fmt.Printf("Released version '%s' for project '%s'\n", newVersion, project.Name)
+
+	fmt.Printf("Released version '%s' for project '%s'\n", config.newVersion, config.project.Name)
 	return nil
 }
 
-// determineNewVersion calculates the new version based on args or flags
-func determineNewVersion(cmd *cobra.Command, args []string, currentVersion string) (string, error) {
-	if len(args) == 1 {
-		return args[0], nil
+// parseReleaseArgs parses arguments and flags to initialize the release config
+func parseReleaseArgs(cmd *cobra.Command, args []string) (*releaseConfig, error) {
+	projectDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get project directory: %v", err)
 	}
-	if len(args) > 1 {
-		return "", fmt.Errorf("too many arguments: use 'cosm release v<version>' or a version flag (--patch, --minor, --major)")
+	projectFile := filepath.Join(projectDir, "Project.json")
+	project, err := loadProject(projectFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load %s: %v", projectFile, err)
 	}
 
-	patch, _ := cmd.Flags().GetBool("patch")
-	minor, _ := cmd.Flags().GetBool("minor")
-	major, _ := cmd.Flags().GetBool("major")
+	config := &releaseConfig{
+		projectDir:  projectDir,
+		project:     project,
+		projectFile: projectFile,
+	}
+
+	if len(args) == 1 {
+		config.newVersion = args[0]
+		return config, nil
+	}
+	if len(args) > 1 {
+		return nil, fmt.Errorf("too many arguments: use 'cosm release v<version>' or a version flag (--patch, --minor, --major)")
+	}
+
+	config.patch, _ = cmd.Flags().GetBool("patch")
+	config.minor, _ = cmd.Flags().GetBool("minor")
+	config.major, _ = cmd.Flags().GetBool("major")
 	count := 0
-	if patch {
+	if config.patch {
 		count++
 	}
-	if minor {
+	if config.minor {
 		count++
 	}
-	if major {
+	if config.major {
 		count++
 	}
 	if count > 1 {
-		return "", fmt.Errorf("only one of --patch, --minor, or --major can be specified")
+		return nil, fmt.Errorf("only one of --patch, --minor, or --major can be specified")
 	}
 	if count == 0 {
-		return "", fmt.Errorf("specify a version (e.g., v1.2.3) or use --patch, --minor, or --major")
+		return nil, fmt.Errorf("specify a version (e.g., v1.2.3) or use --patch, --minor, or --major")
 	}
 
-	currentSemVer, err := ParseSemVer(currentVersion)
+	currentSemVer, err := ParseSemVer(project.Version)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse current version: %v", err)
+		return nil, fmt.Errorf("failed to parse current version '%s': %v", project.Version, err)
 	}
 	switch {
-	case patch:
-		return fmt.Sprintf("v%d.%d.%d", currentSemVer.Major, currentSemVer.Minor, currentSemVer.Patch+1), nil
-	case minor:
-		return fmt.Sprintf("v%d.%d.0", currentSemVer.Major, currentSemVer.Minor+1), nil
-	case major:
-		return fmt.Sprintf("v%d.0.0", currentSemVer.Major+1), nil
+	case config.patch:
+		config.newVersion = fmt.Sprintf("v%d.%d.%d", currentSemVer.Major, currentSemVer.Minor, currentSemVer.Patch+1)
+	case config.minor:
+		config.newVersion = fmt.Sprintf("v%d.%d.0", currentSemVer.Major, currentSemVer.Minor+1)
+	case config.major:
+		config.newVersion = fmt.Sprintf("v%d.0.0", currentSemVer.Major+1)
 	}
-	return "", fmt.Errorf("internal error: no version increment selected")
+	return config, nil
 }
 
-// validateNewVersion ensures the new version is valid and allowed
-func validateNewVersion(newVersion, currentVersion string) error {
-	// Parse versions
-	currVer, err := ParseSemVer(currentVersion)
-	if err != nil {
-		return fmt.Errorf("invalid current version %q: %v", currentVersion, err)
+// validateRepositoryState ensures the repository is clean and in sync with origin
+func validateRepositoryState(config *releaseConfig) error {
+	if err := ensureNoUncommittedChanges(config.projectDir); err != nil {
+		return fmt.Errorf("repository has uncommitted changes in %s: %v", config.projectDir, err)
 	}
-	newVer, err := ParseSemVer(newVersion)
-	if err != nil {
-		return fmt.Errorf("invalid new version %q: %v", newVersion, err)
-	}
-
-	// Allow same version if not tagged, otherwise require newer
-	if newVersion == currentVersion {
-		return nil // Tag existence checked later by ensureTagDoesNotExist
-	}
-
-	// Compare versions: newVer must be greater than currVer
-	if newVer.Major < currVer.Major {
-		return fmt.Errorf("new version %q must be greater than current version %q", newVersion, currentVersion)
-	}
-	if newVer.Major == currVer.Major {
-		if newVer.Minor < currVer.Minor {
-			return fmt.Errorf("new version %q must be greater than current version %q", newVersion, currentVersion)
-		}
-		if newVer.Minor == currVer.Minor && newVer.Patch <= currVer.Patch {
-			return fmt.Errorf("new version %q must be greater than current version %q", newVersion, currentVersion)
-		}
+	if err := ensureLocalRepoInSyncWithOrigin(config.projectDir); err != nil {
+		return fmt.Errorf("repository is not in sync with origin in %s: %v", config.projectDir, err)
 	}
 	return nil
 }
 
-// ensureTagDoesNotExist checks if the new version tag already exists in the repo
-func ensureTagDoesNotExist(newVersion string) error {
-	tagsCmd := exec.Command("git", "tag")
-	output, err := tagsCmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to list Git tags: %v", err)
+// validateReleaseVersion validates the new version and ensures the tag doesn’t exist
+func validateReleaseVersion(config *releaseConfig) error {
+	if err := validateNewVersion(config.newVersion, config.project.Version); err != nil {
+		return err
 	}
-	tags := strings.Split(strings.TrimSpace(string(output)), "\n")
-	for _, tag := range tags {
-		if tag == newVersion {
-			return fmt.Errorf("tag '%s' already exists in the repository", newVersion)
-		}
+	if err := ensureTagDoesNotExist(config.projectDir, config.newVersion); err != nil {
+		return fmt.Errorf("failed to validate tag '%s' in %s: %v", config.newVersion, config.projectDir, err)
 	}
 	return nil
 }
 
 // updateProjectVersion updates Project.json with the new version and commits the change
-func updateProjectVersion(project *types.Project, newVersion string) error {
-	if newVersion == project.Version {
+func updateProjectVersion(config *releaseConfig) error {
+	if config.newVersion == config.project.Version {
 		// No change needed, skip write and commit
 		return nil
 	}
 
-	project.Version = newVersion
-	data, err := json.MarshalIndent(project, "", "  ")
+	config.project.Version = config.newVersion
+	if err := saveProject(config.project, config.projectFile); err != nil {
+		return fmt.Errorf("failed to save %s: %v", config.projectFile, err)
+	}
+
+	if err := stageFiles(config.projectDir, "Project.json"); err != nil {
+		return fmt.Errorf("failed to stage %s in %s: %v", config.projectFile, config.projectDir, err)
+	}
+
+	commitMsg := fmt.Sprintf("Release %s", config.newVersion)
+	if err := commitChanges(config.projectDir, commitMsg); err != nil {
+		return fmt.Errorf("failed to commit release '%s' in %s: %v", config.newVersion, config.projectDir, err)
+	}
+
+	return nil
+}
+
+// publishToGitRemote tags and pushes the release to the remote repository
+func publishToGitRemote(config *releaseConfig) error {
+	// Tag the version
+	if _, err := gitCommand(config.projectDir, "tag", config.newVersion); err != nil {
+		return wrapGitError(config.projectDir, fmt.Sprintf("failed to tag version '%s' in %s", config.newVersion, config.projectDir), err)
+	}
+
+	// Get the current branch
+	branch, err := getCurrentBranch(config.projectDir)
 	if err != nil {
-		return fmt.Errorf("failed to marshal Project.json: %v", err)
-	}
-	if err := os.WriteFile("Project.json", data, 0644); err != nil {
-		return fmt.Errorf("failed to write Project.json: %v", err)
+		return fmt.Errorf("failed to get current branch in %s: %v", config.projectDir, err)
 	}
 
-	addCmd := exec.Command("git", "add", "Project.json")
-	if addOutput, err := addCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to stage Project.json: %v\nOutput: %s", err, addOutput)
+	// Push to the current branch
+	if err := pushToRemote(config.projectDir, branch, true); err != nil {
+		return err
 	}
 
-	commitCmd := exec.Command("git", "commit", "-m", fmt.Sprintf("Release %s", newVersion))
-	if commitOutput, err := commitCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to commit release: %v\nOutput: %s", err, commitOutput)
-	}
+	// Push the tag
+	return pushToRemote(config.projectDir, config.newVersion, false)
+}
 
+// ensureTagDoesNotExist checks if the new version tag already exists in the repo
+func ensureTagDoesNotExist(projectDir, newVersion string) error {
+	output, err := gitCommand(projectDir, "tag")
+	if err != nil {
+		return wrapGitError(projectDir, "failed to list Git tags", err)
+	}
+	tags := strings.Split(strings.TrimSpace(output), "\n")
+	for _, tag := range tags {
+		if tag == newVersion {
+			return fmt.Errorf("tag '%s' already exists in the repository", newVersion)
+		}
+	}
 	return nil
 }

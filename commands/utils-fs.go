@@ -141,6 +141,30 @@ func saveRegistryNames(registryNames []string, registriesDir string) error {
 	return nil
 }
 
+// saveRegistryMetadata marshals and writes the registry metadata to registry.json
+func saveRegistryMetadata(registry types.Registry, filename string) error {
+	data, err := json.MarshalIndent(registry, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal registry.json: %v", err)
+	}
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("failed to write %s: %v", filename, err)
+	}
+	return nil
+}
+
+// savePackageVersions marshals and writes the list of package versions to versions.json
+func savePackageVersions(versions []string, versionsFile string) error {
+	data, err := json.MarshalIndent(versions, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal %s: %v", versionsFile, err)
+	}
+	if err := os.WriteFile(versionsFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write %s: %v", versionsFile, err)
+	}
+	return nil
+}
+
 // loadSpecs loads a package's specs from specs.json
 func loadSpecs(registriesDir, registryName, packageName, version string) (types.Specs, error) {
 	specsFile := filepath.Join(registriesDir, registryName, strings.ToUpper(string(packageName[0])), packageName, version, "specs.json")

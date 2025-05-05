@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -82,45 +81,70 @@ func findPackageInRegistry(packageName, versionTag, registriesDir, registryName 
 	return types.PackageLocation{RegistryName: registryName, Specs: specs}, true, nil
 }
 
+// updateRegistryConfig holds configuration for updating a registry
+type updateRegistryConfig struct {
+	registryName  string
+	registriesDir string
+	registryDir   string
+}
+
 // updateSingleRegistry pulls updates for a single registry
 func updateSingleRegistry(registriesDir, registryName string) error {
-	if err := assertRegistryExists(registriesDir, registryName); err != nil {
+	// Parse arguments and initialize config
+	config, err := parseUpdateArgs(registriesDir, registryName)
+	if err != nil {
 		return err
 	}
+
+	// Validate registry existence
+	if err := validateRegistryForUpdate(config); err != nil {
+		return err
+	}
+
+	// Pull updates from the registry's Git repository
+	if err := pullRegistryUpdates(config); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// parseUpdateArgs validates the registry name and initializes the config
+func parseUpdateArgs(registriesDir, registryName string) (*updateRegistryConfig, error) {
+	if registryName == "" {
+		return nil, fmt.Errorf("registry name cannot be empty")
+	}
+	if registriesDir == "" {
+		return nil, fmt.Errorf("registries directory cannot be empty")
+	}
+
 	registryDir := filepath.Join(registriesDir, registryName)
-	currentDir, err := os.Getwd()
+	return &updateRegistryConfig{
+		registryName:  registryName,
+		registriesDir: registriesDir,
+		registryDir:   registryDir,
+	}, nil
+}
+
+// validateRegistryForUpdate checks if the registry exists
+func validateRegistryForUpdate(config *updateRegistryConfig) error {
+	if err := assertRegistryExists(config.registriesDir, config.registryName); err != nil {
+		return fmt.Errorf("failed to validate registry '%s': %v", config.registryName, err)
+	}
+	return nil
+}
+
+// pullRegistryUpdates pulls updates from the current branch of the registry's Git repository
+func pullRegistryUpdates(config *updateRegistryConfig) error {
+	branch, err := getCurrentBranch(config.registryDir)
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %v", err)
+		return fmt.Errorf("failed to get current branch for registry '%s' in %s: %v", config.registryName, config.registryDir, err)
 	}
-	if err := os.Chdir(registryDir); err != nil {
-		cleanupPull(currentDir)
-		return fmt.Errorf("failed to change to registry directory %s: %v", registryDir, err)
-	}
-	pullCmd := exec.Command("git", "pull", "origin", "main")
-	pullOutput, err := pullCmd.CombinedOutput()
-	if err != nil {
-		cleanupPull(currentDir)
-		return fmt.Errorf("failed to pull updates for registry '%s': %v\nOutput: %s", registryName, err, pullOutput)
-	}
-	if err := restorePullDir(currentDir); err != nil {
+	context := fmt.Sprintf("registry '%s' in %s", config.registryName, config.registryDir)
+	if err := pullFromBranch(config.registryDir, branch, context); err != nil {
 		return err
 	}
 	return nil
-}
-
-// restorePullDir returns to the original directory
-func restorePullDir(originalDir string) error {
-	if err := os.Chdir(originalDir); err != nil {
-		return fmt.Errorf("failed to return to original directory %s: %v", originalDir, err)
-	}
-	return nil
-}
-
-// cleanupPull reverts to the original directory
-func cleanupPull(originalDir string) {
-	if err := os.Chdir(originalDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to return to original directory %s: %v\n", originalDir, err)
-	}
 }
 
 // assertRegistryExists verifies that the specified registry exists in registries.json
@@ -164,16 +188,4 @@ func loadAndCheckRegistries(registriesDir, registryName string) ([]string, error
 	}
 
 	return registryNames, nil
-}
-
-// validateStatusArgs checks the command-line arguments for validity
-func validateStatusArgs(args []string) (string, error) {
-	if len(args) != 1 {
-		return "", fmt.Errorf("exactly one argument required (e.g., cosm registry status <registry_name>)")
-	}
-	registryName := args[0]
-	if registryName == "" {
-		return "", fmt.Errorf("registry name cannot be empty")
-	}
-	return registryName, nil
 }

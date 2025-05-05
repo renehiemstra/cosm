@@ -2,7 +2,6 @@ package commands
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,33 +10,100 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// deleteRegistryConfig holds configuration for deleting a registry
+type deleteRegistryConfig struct {
+	registryName  string
+	cosmDir       string
+	registriesDir string
+	registryPath  string
+	force         bool
+	registryNames []string
+}
+
 // RegistryDelete deletes a registry from the local system
 func RegistryDelete(cmd *cobra.Command, args []string) error {
-	registryName, err := validateStatusArgs(args) // Reusing validateStatusArgs for single argument check
+	// Parse arguments and initialize config
+	config, err := parseDeleteArgs(cmd, args)
 	if err != nil {
 		return err
+	}
+
+	// Load existing registry names
+	config.registryNames, err = loadRegistryNames(config.cosmDir)
+	if err != nil {
+		if !os.IsNotExist(err) && !strings.Contains(err.Error(), "no registries available") {
+			return fmt.Errorf("failed to load registry names: %v", err)
+		}
+		config.registryNames = []string{} // Initialize empty list if registries.json is missing or empty
+	}
+
+	// Validate registry for deletion
+	if err := validateRegistryForDeletion(config); err != nil {
+		return err
+	}
+
+	// Prompt for confirmation if not forced
+	if err := promptForDeletion(config); err != nil {
+		return err
+	}
+
+	// Delete registry and update registries.json
+	if err := deleteRegistry(config); err != nil {
+		return err
+	}
+
+	fmt.Printf("Deleted registry '%s'\n", config.registryName)
+	return nil
+}
+
+// parseDeleteArgs parses and validates the registry name argument
+func parseDeleteArgs(cmd *cobra.Command, args []string) (*deleteRegistryConfig, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("exactly one argument required (e.g., cosm registry delete <registryName>)")
+	}
+	registryName := args[0]
+	if registryName == "" {
+		return nil, fmt.Errorf("registry name cannot be empty")
 	}
 
 	cosmDir, err := getCosmDir()
 	if err != nil {
+		return nil, fmt.Errorf("failed to get cosm directory: %v", err)
+	}
+	registriesDir, err := getRegistriesDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get registries directory: %v", err)
+	}
+
+	force, err := cmd.Flags().GetBool("force")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get force flag: %v", err)
+	}
+
+	return &deleteRegistryConfig{
+		registryName:  registryName,
+		cosmDir:       cosmDir,
+		registriesDir: registriesDir,
+		registryPath:  filepath.Join(registriesDir, registryName),
+		force:         force,
+	}, nil
+}
+
+// validateRegistryForDeletion checks if the registry exists and is valid
+func validateRegistryForDeletion(config *deleteRegistryConfig) error {
+	if err := assertRegistryExists(config.registriesDir, config.registryName); err != nil {
 		return err
 	}
-	registriesDir := setupRegistriesDir(cosmDir)
-
-	// Check if registry exists
-	if err := assertRegistryExists(registriesDir, registryName); err != nil {
-		return err
+	if _, err := os.Stat(config.registryPath); os.IsNotExist(err) {
+		return fmt.Errorf("registry directory '%s' not found", config.registryPath)
 	}
+	return nil
+}
 
-	registryPath := filepath.Join(registriesDir, registryName)
-	if _, err := os.Stat(registryPath); os.IsNotExist(err) {
-		return fmt.Errorf("registry directory '%s' not found", registryName)
-	}
-
-	// Check for --force flag
-	force, _ := cmd.Flags().GetBool("force")
-	if !force {
-		fmt.Printf("Are you sure you want to delete registry '%s'? [y/N]: ", registryName)
+// promptForDeletion prompts the user for confirmation if not forced
+func promptForDeletion(config *deleteRegistryConfig) error {
+	if !config.force {
+		fmt.Printf("Are you sure you want to delete registry '%s'? [y/N]: ", config.registryName)
 		scanner := bufio.NewScanner(os.Stdin)
 		scanner.Scan()
 		response := strings.TrimSpace(strings.ToLower(scanner.Text()))
@@ -46,32 +112,23 @@ func RegistryDelete(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 	}
+	return nil
+}
 
-	// Remove registry directory
-	if err := os.RemoveAll(registryPath); err != nil {
-		return fmt.Errorf("failed to delete registry directory '%s': %v", registryPath, err)
+// deleteRegistry removes the registry directory and updates registries.json
+func deleteRegistry(config *deleteRegistryConfig) error {
+	if err := os.RemoveAll(config.registryPath); err != nil {
+		return fmt.Errorf("failed to remove directory '%s': %v", config.registryPath, err)
 	}
 
-	// Update registries.json
-	registryNames, err := loadRegistryNames(cosmDir)
-	if err != nil {
-		return err
-	}
 	var updatedNames []string
-	for _, name := range registryNames {
-		if name != registryName {
+	for _, name := range config.registryNames {
+		if name != config.registryName {
 			updatedNames = append(updatedNames, name)
 		}
 	}
-	data, err := json.MarshalIndent(updatedNames, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal registries.json: %v", err)
+	if err := saveRegistryNames(updatedNames, config.registriesDir); err != nil {
+		return err
 	}
-	registriesFile := filepath.Join(registriesDir, "registries.json")
-	if err := os.WriteFile(registriesFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write registries.json: %v", err)
-	}
-
-	fmt.Printf("Deleted registry '%s'\n", registryName)
 	return nil
 }

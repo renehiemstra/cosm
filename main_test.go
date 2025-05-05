@@ -116,7 +116,7 @@ func TestRegistryStatus(t *testing.T) {
 	// Test 2: Error case with non-existent registry
 	invalidRegistry := "nonexistent"
 	stdout, stderr, err = runCommand(t, tempDir, "registry", "status", invalidRegistry)
-	expectedStderr := fmt.Sprintf("Error: registry '%s' not found in registries.json\n", invalidRegistry)
+	expectedStderr := fmt.Sprintf("Error: failed to validate registry '%s': registry '%s' not found in registries.json\n", invalidRegistry, invalidRegistry)
 	checkOutput(t, stdout, stderr, "", err, true, 1)
 	if stderr != expectedStderr {
 		t.Errorf("Expected stderr %q, got %q", expectedStderr, stderr)

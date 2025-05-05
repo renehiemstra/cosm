@@ -220,18 +220,6 @@ func addSpecificPackageVersion(config *addPackageConfig) error {
 	return nil
 }
 
-// saveRegistryMetadata marshals and writes the registry metadata to registry.json
-func saveRegistryMetadata(registry types.Registry, filename string) error {
-	data, err := json.MarshalIndent(registry, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal registry.json: %v", err)
-	}
-	if err := os.WriteFile(filename, data, 0644); err != nil {
-		return fmt.Errorf("failed to write registry.json: %v", filename, err)
-	}
-	return nil
-}
-
 // ensurePackageNotRegistered checks if the package is already in the registry
 func ensurePackageNotRegistered(registry types.Registry, packageName, registryName, tmpClonePath string) error {
 	if _, exists := registry.Packages[packageName]; exists {
