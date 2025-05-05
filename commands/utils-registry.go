@@ -147,6 +147,30 @@ func pullRegistryUpdates(config *updateRegistryConfig) error {
 	return nil
 }
 
+// commitAndPushRegistryChanges stages, commits, and pushes changes to the registry
+func commitAndPushRegistryChanges(registriesDir, registryName, commitMsg string) error {
+	registryDir := filepath.Join(registriesDir, registryName)
+
+	// Stage all changes
+	if err := stageFiles(registryDir, "."); err != nil {
+		return err
+	}
+
+	// Commit changes
+	if err := commitChanges(registryDir, commitMsg); err != nil {
+		return err
+	}
+
+	// Get the current branch
+	branch, err := getCurrentBranch(registryDir)
+	if err != nil {
+		return err
+	}
+
+	// Push changes to the current branch
+	return pushToRemote(registryDir, branch, false)
+}
+
 // assertRegistryExists verifies that the specified registry exists in registries.json
 func assertRegistryExists(registriesDir, registryName string) error {
 	registriesFile := filepath.Join(registriesDir, "registries.json")

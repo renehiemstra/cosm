@@ -121,28 +121,28 @@ func clone(gitURL, destination string) (string, error) {
 	return destination, nil
 }
 
-// commitAndPushRegistryChanges stages, commits, and pushes changes to the registry
-func commitAndPushRegistryChanges(registriesDir, registryName, commitMsg string) error {
-	registryDir := filepath.Join(registriesDir, registryName)
-
-	// Stage all changes
-	if err := stageFiles(registryDir, "."); err != nil {
-		return err
-	}
-
-	// Commit changes
-	if err := commitChanges(registryDir, commitMsg); err != nil {
-		return err
-	}
-
-	// Get the current branch
-	branch, err := getCurrentBranch(registryDir)
+// listTags retrieves the list of tags in the Git repository
+func listTags(dir string) ([]string, error) {
+	output, err := gitCommand(dir, "tag")
 	if err != nil {
-		return err
+		return nil, wrapGitError(dir, fmt.Sprintf("failed to list tags in %s", dir), err)
 	}
+	tags := strings.Split(strings.TrimSpace(output), "\n")
+	if len(tags) == 1 && tags[0] == "" {
+		return []string{}, nil
+	}
+	return tags, nil
+}
 
-	// Push changes to the current branch
-	return pushToRemote(registryDir, branch, false)
+// createTag creates a new tag in the Git repository
+func createTag(dir, tag string) error {
+	if tag == "" {
+		return fmt.Errorf("tag name cannot be empty")
+	}
+	if _, err := gitCommand(dir, "tag", tag); err != nil {
+		return wrapGitError(dir, fmt.Sprintf("failed to create tag '%s' in %s", tag, dir), err)
+	}
+	return nil
 }
 
 // checkoutVersion switches the clone to the specified SHA1

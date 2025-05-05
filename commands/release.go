@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -163,8 +162,8 @@ func updateProjectVersion(config *releaseConfig) error {
 // publishToGitRemote tags and pushes the release to the remote repository
 func publishToGitRemote(config *releaseConfig) error {
 	// Tag the version
-	if _, err := gitCommand(config.projectDir, "tag", config.newVersion); err != nil {
-		return wrapGitError(config.projectDir, fmt.Sprintf("failed to tag version '%s' in %s", config.newVersion, config.projectDir), err)
+	if err := createTag(config.projectDir, config.newVersion); err != nil {
+		return fmt.Errorf("failed to create tag '%s' in %s: %v", config.newVersion, config.projectDir, err)
 	}
 
 	// Get the current branch
@@ -184,11 +183,10 @@ func publishToGitRemote(config *releaseConfig) error {
 
 // ensureTagDoesNotExist checks if the new version tag already exists in the repo
 func ensureTagDoesNotExist(projectDir, newVersion string) error {
-	output, err := gitCommand(projectDir, "tag")
+	tags, err := listTags(projectDir)
 	if err != nil {
-		return wrapGitError(projectDir, "failed to list Git tags", err)
+		return fmt.Errorf("failed to list tags in %s: %v", projectDir, err)
 	}
-	tags := strings.Split(strings.TrimSpace(output), "\n")
 	for _, tag := range tags {
 		if tag == newVersion {
 			return fmt.Errorf("tag '%s' already exists in the repository", newVersion)
