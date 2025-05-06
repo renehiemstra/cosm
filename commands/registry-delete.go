@@ -29,7 +29,7 @@ func RegistryDelete(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load existing registry names
-	config.registryNames, err = loadRegistryNames(config.cosmDir)
+	config.registryNames, err = loadRegistryNames(config.registriesDir)
 	if err != nil {
 		if !os.IsNotExist(err) && !strings.Contains(err.Error(), "no registries available") {
 			return fmt.Errorf("failed to load registry names: %v", err)

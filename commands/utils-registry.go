@@ -30,9 +30,8 @@ func promptUserForRegistry(packageName, versionTag string, foundPackages []types
 }
 
 // findPackageInRegistries searches for a package across all registries
-func findPackageInRegistries(packageName, versionTag, cosmDir string, registryNames []string) (types.PackageLocation, error) {
+func findPackageInRegistries(packageName, versionTag, registriesDir string, registryNames []string) (types.PackageLocation, error) {
 	var foundPackages []types.PackageLocation
-	registriesDir := filepath.Join(cosmDir, "registries")
 
 	for _, regName := range registryNames {
 		pkg, found, err := findPackageInRegistry(packageName, versionTag, registriesDir, regName)

@@ -24,7 +24,7 @@ func RegistryUpdate(cmd *cobra.Command, args []string) error {
 	registriesDir := setupRegistriesDir(cosmDir)
 
 	if all {
-		registryNames, err := loadRegistryNames(cosmDir)
+		registryNames, err := loadRegistryNames(registriesDir)
 		if err != nil {
 			return fmt.Errorf("failed to load registry names: %v", err)
 		}

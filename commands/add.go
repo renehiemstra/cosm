@@ -18,15 +18,15 @@ func Add(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	cosmDir, err := getCosmDir()
+	registriesDir, err := getRegistriesDir()
 	if err != nil {
 		return err
 	}
-	registryNames, err := loadRegistryNames(cosmDir)
+	registryNames, err := loadRegistryNames(registriesDir)
 	if err != nil {
 		return err
 	}
-	selectedPackage, err := findPackageInRegistries(packageName, versionTag, cosmDir, registryNames)
+	selectedPackage, err := findPackageInRegistries(packageName, versionTag, registriesDir, registryNames)
 	if err != nil {
 		return err
 	}

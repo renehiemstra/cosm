@@ -47,8 +47,7 @@ func getRegistriesDir() (string, error) {
 }
 
 // loadRegistryNames loads the list of registry names from registries.json
-func loadRegistryNames(cosmDir string) ([]string, error) {
-	registriesDir := filepath.Join(cosmDir, "registries")
+func loadRegistryNames(registriesDir string) ([]string, error) {
 	registriesFile := filepath.Join(registriesDir, "registries.json")
 	if _, err := os.Stat(registriesFile); os.IsNotExist(err) {
 		return nil, fmt.Errorf("no registries found (run 'cosm registry init' first)")

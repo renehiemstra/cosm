@@ -2,10 +2,8 @@ package commands
 
 import (
 	"cosm/types"
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"strings"
 )
 
 // generateBuildList creates a build list using Minimum Version Selection (MVS),
@@ -15,8 +13,12 @@ func generateBuildList(project *types.Project, registriesDir string) (types.Buil
 	buildList := types.BuildList{Dependencies: make(map[string]types.BuildListDependency)}
 
 	// Process direct dependencies
-	for _, dep := range project.Deps {
-		depUUID, specs, depBuildList, err := findDependency(dep.Name, dep.Version, registriesDir)
+	for key, dep := range project.Deps {
+		depUUID, err := extractUUIDFromKey(key)
+		if err != nil {
+			return types.BuildList{}, err
+		}
+		specs, depBuildList, err := findDependency(dep.Name, dep.Version, depUUID, registriesDir)
 		if err != nil {
 			return types.BuildList{}, err
 		}
@@ -38,16 +40,23 @@ func generateBuildList(project *types.Project, registriesDir string) (types.Buil
 	return buildList, nil
 }
 
-// findDependency searches all registries for a dependency, returning its UUID, specs, and build list
-func findDependency(depName, depVersion, registriesDir string) (string, types.Specs, types.BuildList, error) {
-	registriesFile := filepath.Join(registriesDir, "registries.json")
-	var registryNames []string
-	if data, err := os.ReadFile(registriesFile); err == nil {
-		if err := json.Unmarshal(data, &registryNames); err != nil {
-			return "", types.Specs{}, types.BuildList{}, fmt.Errorf("failed to parse registries.json: %v", err)
-		}
-	} else if !os.IsNotExist(err) {
-		return "", types.Specs{}, types.BuildList{}, fmt.Errorf("failed to read registries.json: %v", err)
+// extractUUIDFromKey extracts the UUID from a dependency key formatted as <uuid>@<major version>
+func extractUUIDFromKey(key string) (string, error) {
+	parts := strings.Split(key, "@")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid dependency key format: %s", key)
+	}
+	if parts[0] == "" {
+		return "", fmt.Errorf("UUID is empty in key: %s", key)
+	}
+	return parts[0], nil
+}
+
+// findDependency searches all registries for a dependency with matching name, UUID, and version
+func findDependency(depName, depVersion, depUUID, registriesDir string) (types.Specs, types.BuildList, error) {
+	registryNames, err := loadRegistryNames(registriesDir)
+	if err != nil {
+		return types.Specs{}, types.BuildList{}, fmt.Errorf("failed to load registry names: %v", err)
 	}
 
 	for _, regName := range registryNames {
@@ -55,7 +64,7 @@ func findDependency(depName, depVersion, registriesDir string) (string, types.Sp
 		if err != nil {
 			continue
 		}
-		if pkginfo, exists := reg.Packages[depName]; exists {
+		if pkgInfo, exists := reg.Packages[depName]; exists && pkgInfo.UUID == depUUID {
 			specs, err := loadSpecs(registriesDir, regName, depName, depVersion)
 			if err != nil {
 				continue
@@ -65,12 +74,12 @@ func findDependency(depName, depVersion, registriesDir string) (string, types.Sp
 			}
 			buildList, err := loadBuildList(registriesDir, regName, depName, depVersion)
 			if err != nil {
-				return "", types.Specs{}, types.BuildList{}, fmt.Errorf("failed to load build list for '%s@%s' in registry '%s': %v", depName, depVersion, regName, err)
+				return types.Specs{}, types.BuildList{}, fmt.Errorf("failed to load build list for '%s@%s' in registry '%s': %v", depName, depVersion, regName, err)
 			}
-			return pkginfo.UUID, specs, buildList, nil
+			return specs, buildList, nil
 		}
 	}
-	return "", types.Specs{}, types.BuildList{}, fmt.Errorf("dependency '%s@%s' not found in any registry", depName, depVersion)
+	return types.Specs{}, types.BuildList{}, fmt.Errorf("dependency '%s@%s' with UUID '%s' not found in any registry", depName, depVersion, depUUID)
 }
 
 // createDependencyEntry builds a BuildListDependency entry with its key
