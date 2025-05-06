@@ -79,15 +79,17 @@ func main() {
 		SilenceUsage: true, // Prevent usage output in stderr
 	}
 
+	// initCmd initializes a new project
 	var initCmd = &cobra.Command{
 		Use:          "init <package-name> [version]",
-		Short:        "Initialize a new project with a Project.json file",
+		Short:        "Initialize a new project",
 		Args:         cobra.RangeArgs(1, 2),
 		RunE:         commands.Init,
-		SilenceUsage: true, // Prevent usage output in stderr
+		SilenceUsage: true,
 	}
-	initCmd.Flags().StringP("language", "l", "", "Specify the project language (e.g., lua, terra)")
-	initCmd.Flags().StringP("version", "v", "", "Specify the initial version (e.g., v1.0.0; default: v0.1.0)")
+	initCmd.Flags().StringP("version", "v", "", "Version of the project (default: v0.1.0)")
+	initCmd.Flags().StringP("language", "l", "", "Language of the project (not allowed with --template)")
+	initCmd.Flags().StringP("template", "t", "", "Path to template directory (relative to .cosm/templates/, e.g., go/mytemplate)")
 
 	var addCmd = &cobra.Command{
 		Use:          "add <package_name> [v<version>]",
