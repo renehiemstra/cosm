@@ -15,12 +15,12 @@ func generateBuildList(project *types.Project, registriesDir string) (types.Buil
 	buildList := types.BuildList{Dependencies: make(map[string]types.BuildListDependency)}
 
 	// Process direct dependencies
-	for depName, depVersion := range project.Deps {
-		depUUID, specs, depBuildList, err := findDependency(depName, depVersion, registriesDir)
+	for _, dep := range project.Deps {
+		depUUID, specs, depBuildList, err := findDependency(dep.Name, dep.Version, registriesDir)
 		if err != nil {
 			return types.BuildList{}, err
 		}
-		key, entry, err := createDependencyEntry(depName, depVersion, depUUID, specs)
+		key, entry, err := createDependencyEntry(dep.Name, dep.Version, depUUID, specs)
 		if err != nil {
 			return types.BuildList{}, err
 		}

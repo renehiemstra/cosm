@@ -106,7 +106,7 @@ func loadProject(filename string) (*types.Project, error) {
 		return nil, fmt.Errorf("failed to parse Project.json at %s: %v", filename, err)
 	}
 	if project.Deps == nil {
-		project.Deps = make(map[string]string)
+		project.Deps = make(map[string]types.Dependency)
 	}
 	return &project, nil
 }
@@ -163,6 +163,23 @@ func savePackageVersions(versions []string, versionsFile string) error {
 		return fmt.Errorf("failed to write %s: %v", versionsFile, err)
 	}
 	return nil
+}
+
+// loadVersions loads the list of versions for a package from versions.json
+func loadVersions(registriesDir, registryName, packageName string) ([]string, error) {
+	versionsFile := filepath.Join(registriesDir, registryName, strings.ToUpper(string(packageName[0])), packageName, "versions.json")
+	data, err := os.ReadFile(versionsFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read versions.json for '%s' in registry '%s': %v", packageName, registryName, err)
+	}
+	var versions []string
+	if err := json.Unmarshal(data, &versions); err != nil {
+		return nil, fmt.Errorf("failed to parse versions.json for '%s' in registry '%s': %v", packageName, registryName, err)
+	}
+	return versions, nil
 }
 
 // loadSpecs loads a package's specs from specs.json

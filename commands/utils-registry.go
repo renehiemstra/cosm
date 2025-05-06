@@ -58,27 +58,77 @@ func findPackageInRegistry(packageName, versionTag, registriesDir, registryName 
 		return types.PackageLocation{}, false, fmt.Errorf("failed to load registry metadata for '%s': %v", registryName, err)
 	}
 
-	_, exists := registry.Packages[packageName]
-	if !exists {
+	if _, exists := registry.Packages[packageName]; !exists {
 		return types.PackageLocation{}, false, nil
 	}
 
-	specsFile := filepath.Join(registriesDir, registryName, strings.ToUpper(string(packageName[0])), packageName, versionTag, "specs.json")
-	if _, err := os.Stat(specsFile); os.IsNotExist(err) {
-		return types.PackageLocation{}, false, nil
+	// Determine the version to use
+	version := versionTag
+	if versionTag == "" {
+		latestVersion, err := findLatestVersionInRegistry(packageName, registriesDir, registryName)
+		if err != nil {
+			return types.PackageLocation{}, false, err
+		}
+		if latestVersion == "" {
+			return types.PackageLocation{}, false, nil
+		}
+		version = latestVersion
 	}
-	data, err := os.ReadFile(specsFile)
+
+	// Load specs for the selected version
+	specs, err := loadSpecs(registriesDir, registryName, packageName, version)
 	if err != nil {
-		return types.PackageLocation{}, false, fmt.Errorf("failed to read specs.json for '%s' in registry '%s': %v", packageName, registryName, err)
+		if os.IsNotExist(err) {
+			return types.PackageLocation{}, false, nil
+		}
+		return types.PackageLocation{}, false, fmt.Errorf("failed to load specs for '%s@%s' in registry '%s': %v", packageName, version, registryName, err)
 	}
-	var specs types.Specs
-	if err := json.Unmarshal(data, &specs); err != nil {
-		return types.PackageLocation{}, false, fmt.Errorf("failed to parse specs.json for '%s' in registry '%s': %v", packageName, registryName, err)
-	}
-	if specs.Version != versionTag {
+	if specs.Version != version {
 		return types.PackageLocation{}, false, nil
 	}
+
 	return types.PackageLocation{RegistryName: registryName, Specs: specs}, true, nil
+}
+
+// findLatestVersionInRegistry finds the latest version of a package in a single registry
+func findLatestVersionInRegistry(packageName, registriesDir, registryName string) (string, error) {
+	// Load versions
+	versions, err := loadVersions(registriesDir, registryName, packageName)
+	if err != nil {
+		return "", err
+	}
+	if len(versions) == 0 {
+		return "", nil
+	}
+
+	// Determine the latest version
+	latestVersion, err := determineLatestVersion(versions)
+	if err != nil {
+		return "", err
+	}
+
+	return latestVersion, nil
+}
+
+// determineLatestVersion finds the latest version from a list of versions
+func determineLatestVersion(versions []string) (string, error) {
+	var latestVersion string
+
+	for _, version := range versions {
+		if latestVersion == "" {
+			latestVersion = version
+		} else {
+			maxVersion, err := MaxSemVer(latestVersion, version)
+			if err != nil {
+				continue // Skip invalid versions
+			}
+			if maxVersion == version {
+				latestVersion = version
+			}
+		}
+	}
+
+	return latestVersion, nil
 }
 
 // updateRegistryConfig holds configuration for updating a registry

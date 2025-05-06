@@ -534,6 +534,38 @@ func TestAddDependency(t *testing.T) {
 	verifyProjectDependencies(t, filepath.Join(projectDir, "Project.json"), packageName, packageVersion)
 }
 
+// TestAddDependencyNoVersion tests the cosm add command when no version is specified
+func TestAddDependencyNoVersion(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Setup registry
+	registryName := "myreg"
+	setupRegistry(t, tempDir, registryName)
+
+	// Setup package with multiple versions
+	packageName := "mypkg"
+	packageVersions := []string{"v1.0.0", "v1.1.0", "v1.2.0"}
+	packageDir, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersions[0])
+	for _, version := range packageVersions {
+		releasePackage(t, packageDir, version)
+	}
+	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
+
+	// Initialize project
+	projectDir := initPackage(t, tempDir, "myproject")
+
+	// Add dependency to project without specifying version
+	stdout, stderr := addDependencyToProject(t, projectDir, packageName, "")
+	expectedOutput := fmt.Sprintf("Added dependency '%s' %s from registry '%s' to project\n", packageName, packageVersions[len(packageVersions)-1], registryName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+
+	// Verify dependency in Project.json
+	verifyProjectDependencies(t, filepath.Join(projectDir, "Project.json"), packageName, packageVersions[len(packageVersions)-1])
+}
+
 func TestRmDependency(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
@@ -568,6 +600,61 @@ func TestRmDependency(t *testing.T) {
 	expectedStderr := "Error: dependency 'nonexistent' not found in project\n"
 	if stderr != expectedStderr {
 		t.Errorf("Expected stderr %q, got %q", expectedStderr, stderr)
+	}
+}
+
+func TestRmDependencyMultipleMatches(t *testing.T) {
+	tempDir, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Setup registry
+	registryName := "myreg"
+	setupRegistry(t, tempDir, registryName)
+
+	// setup package
+	packageName := "mypkg"
+	packageVersions := []string{"v1.0.0", "v2.0.0"}
+	packageDir, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersions[0])
+	releasePackage(t, packageDir, packageVersions[0])
+	releasePackage(t, packageDir, packageVersions[1])
+	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
+
+	// Initialize project and add both dependencies
+	projectDir := initPackage(t, tempDir, "myproject")
+	addDependencyToProject(t, projectDir, packageName, packageVersions[0])
+	addDependencyToProject(t, projectDir, packageName, packageVersions[1])
+
+	// Remove dependency with user prompt
+	cmd := exec.Command(binaryPath, "rm", packageName)
+	cmd.Dir = projectDir
+	cmd.Stdin = strings.NewReader("1\n") // Select the first dependency
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		t.Fatalf("Failed to remove dependency '%s': %v\nStderr: %s", packageName, err, stderr.String())
+	}
+
+	// Verify output
+	expectedOutput := fmt.Sprintf("Removed dependency '%s' from project\n", packageName)
+	if !strings.Contains(stdout.String(), expectedOutput) {
+		t.Errorf("Expected output containing %q, got %q\nStderr: %s", expectedOutput, stdout.String(), stderr.String())
+	}
+
+	// Verify only one dependency remains
+	project := loadProjectFile(t, filepath.Join(projectDir, "Project.json"))
+	remainingDeps := 0
+	for _, dep := range project.Deps {
+		if dep.Name == packageName {
+			remainingDeps++
+			if dep.Version != packageVersions[1] {
+				t.Errorf("Expected remaining dependency version %s, got %s", packageVersions[1], dep.Version)
+			}
+		}
+	}
+	if remainingDeps != 1 {
+		t.Errorf("Expected 1 remaining dependency for '%s', got %d: %v", packageName, remainingDeps, project.Deps)
 	}
 }
 

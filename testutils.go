@@ -66,7 +66,6 @@ func initPackage(t *testing.T, tempDir, packageName string, version ...string) s
 		Authors:  []string{"[testuser]testuser@git.com"},
 		Language: "",
 		Version:  expectedVersion,
-		Deps:     make(map[string]string),
 	}
 	checkProjectFile(t, filepath.Join(packageDir, "Project.json"), expectedProject)
 
@@ -111,7 +110,11 @@ func addPackageToRegistry(t *testing.T, tempDir, registryName, packageGitURL str
 
 // addDependencyToProject adds a dependency to a project using cosm add
 func addDependencyToProject(t *testing.T, projectDir, packageName, version string) (string, string) {
-	cmd := exec.Command(binaryPath, "add", packageName+"@"+version)
+	args := []string{"add", packageName}
+	if version != "" {
+		args = append(args, version)
+	}
+	cmd := exec.Command(binaryPath, args...)
 	cmd.Dir = projectDir
 	cmd.Stdin = strings.NewReader("\n") // Empty input for single registry case
 	var stdout, stderr bytes.Buffer
@@ -235,7 +238,7 @@ func loadProjectFile(t *testing.T, projectFile string) types.Project {
 		t.Fatalf("Failed to parse Project.json: %v", err)
 	}
 	if project.Deps == nil {
-		project.Deps = make(map[string]string)
+		project.Deps = make(map[string]types.Dependency)
 	}
 	return project
 }
@@ -316,9 +319,29 @@ func loadBuildList(t *testing.T, buildListFile string) types.BuildList {
 
 /////////////////////// Check HELPER FUNCTIONS ///////////////////////
 
+// verifyProjectDependencies checks the Project.json dependencies
 func verifyProjectDependencies(t *testing.T, projectFile, packageName, expectedVersion string) {
 	project := loadProjectFile(t, projectFile)
-	if version, exists := project.Deps[packageName]; !exists || version != expectedVersion {
+	found := false
+	for key, dep := range project.Deps {
+		if dep.Name == packageName && dep.Version == expectedVersion {
+			// Verify key format: <uuid>@<major version>
+			parts := strings.Split(key, "@")
+			if len(parts) != 2 {
+				t.Errorf("Expected dependency key format <uuid>@<major version>, got %q", key)
+			}
+			if _, err := uuid.Parse(parts[0]); err != nil {
+				t.Errorf("Expected valid UUID in key %q, got error: %v", key, err)
+			}
+			majorVersion, err := commands.GetMajorVersion(expectedVersion)
+			if err != nil || parts[1] != majorVersion {
+				t.Errorf("Expected major version %q in key %q, got %q", majorVersion, key, parts[1])
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
 		t.Errorf("Expected dependency %s:%s, got %v", packageName, expectedVersion, project.Deps)
 	}
 }
@@ -439,10 +462,10 @@ func checkProjectFile(t *testing.T, file string, expected types.Project) {
 	if len(project.Deps) != len(expected.Deps) {
 		t.Errorf("Expected %d dependencies, got %d", len(expected.Deps), len(project.Deps))
 	} else {
-		for depName, expVersion := range expected.Deps {
-			gotVersion, exists := project.Deps[depName]
-			if !exists || gotVersion != expVersion {
-				t.Errorf("Expected dep %q: %q, got %q", depName, expVersion, gotVersion)
+		for depKey, expDep := range expected.Deps {
+			gotDep, exists := project.Deps[depKey]
+			if !exists || gotDep.Version != expDep.Version {
+				t.Errorf("Expected dep %q: %q, got %q", expDep.Name, expDep.Version, gotDep.Version)
 			}
 		}
 	}

@@ -90,12 +90,12 @@ runall(){
 
     # releases of D
     cd $DEPOT_PATH/examples/D
-    cosm add E@v1.1.0
+    cosm add E v1.1.0
     add_commit_push D
     cosm release v1.1.0
     cosm release v1.2.0
     cosm rm E
-    cosm add E@v1.2.0
+    cosm add E v1.2.0
     add_commit_push D
     cosm release v1.3.0
     cosm release v1.4.0
@@ -103,11 +103,11 @@ runall(){
 
     # releases of B
     cd $DEPOT_PATH/examples/B
-    cosm add D@v1.1.0
+    cosm add D v1.1.0
     add_commit_push B
     cosm release v1.1.0
     cosm rm D
-    cosm add D@v1.3.0
+    cosm add D v1.3.0
     add_commit_push B
     cosm release v1.2.0
     cosm registry add TestRegistry $DEPOT_PATH/localhub/B
@@ -115,19 +115,19 @@ runall(){
     # releases of C
     cd $DEPOT_PATH/examples/C
     cosm release v1.1.0
-    cosm add D@v1.4.0
+    cosm add D v1.4.0
     add_commit_push C
     cosm release v1.2.0
     cosm rm D
-    cosm add F@v1.1.0
+    cosm add F # version v1.1.0 will be chosen
     add_commit_push C
     cosm release v1.3.0
     cosm registry add TestRegistry $DEPOT_PATH/localhub/C
 
     # releases of A
     cd $DEPOT_PATH/examples/A
-    cosm add B@v1.2.0
-    cosm add C@v1.2.0
+    cosm add B v1.2.0
+    cosm add C v1.2.0
     add_commit_push A
     cosm release v1.0.0
     cosm registry add TestRegistry $DEPOT_PATH/localhub/A

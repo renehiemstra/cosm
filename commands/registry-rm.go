@@ -27,7 +27,7 @@ type rmRegistryConfig struct {
 // RegistryRm removes a package or a specific version from a registry
 func RegistryRm(cmd *cobra.Command, args []string) error {
 	// Parse arguments and initialize config
-	config, err := parseRmArgs(cmd, args)
+	config, err := parseRegistryRmArgs(cmd, args)
 	if err != nil {
 		return err
 	}
@@ -50,7 +50,7 @@ func RegistryRm(cmd *cobra.Command, args []string) error {
 }
 
 // parseRmArgs parses and validates the registry name, package name, and optional version
-func parseRmArgs(cmd *cobra.Command, args []string) (*rmRegistryConfig, error) {
+func parseRegistryRmArgs(cmd *cobra.Command, args []string) (*rmRegistryConfig, error) {
 	if len(args) < 2 || len(args) > 3 {
 		return nil, fmt.Errorf("requires registry name and package name, with optional version (e.g., cosm registry rm <registry> <package> [<version>])")
 	}

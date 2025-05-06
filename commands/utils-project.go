@@ -17,7 +17,6 @@ func createProject(packageName, projectUUID string, authors []string, language, 
 		Authors:  authors,
 		Language: language,
 		Version:  version,
-		Deps:     make(map[string]string),
 	}
 }
 

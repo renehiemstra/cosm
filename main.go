@@ -90,11 +90,11 @@ func main() {
 	initCmd.Flags().StringP("version", "v", "", "Specify the initial version (e.g., v1.0.0; default: v0.1.0)")
 
 	var addCmd = &cobra.Command{
-		Use:          "add <package_name>@v<version_number>",
+		Use:          "add <package_name> [v<version>]",
 		Short:        "Add a dependency to the project",
-		Args:         cobra.ExactArgs(1),
+		Args:         cobra.RangeArgs(1, 2),
 		RunE:         commands.Add,
-		SilenceUsage: true, // Prevent usage output in stderr
+		SilenceUsage: true,
 	}
 
 	var rmCmd = &cobra.Command{
