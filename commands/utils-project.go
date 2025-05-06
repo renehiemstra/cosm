@@ -2,11 +2,9 @@ package commands
 
 import (
 	"cosm/types"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // createProject constructs a new Project struct
@@ -34,49 +32,82 @@ func selectPackageFromResults(packageName, versionTag string, foundPackages []ty
 // MakePackageAvailable copies the contents of a cloned package for a specific version
 // from ~/.cosm/clones/<UUID> to ~/.cosm/packages/<packageName>/<SHA1>, excluding Git-related files,
 // and ensures the clone is reverted to its previous state even on error.
-func MakePackageAvailable(cosmDir, registryName, packageName, versionTag string) error {
-	// Construct paths
-	registriesDir := filepath.Join(cosmDir, "registries")
-	specsFile := filepath.Join(registriesDir, registryName, strings.ToUpper(string(packageName[0])), packageName, versionTag, "specs.json")
-
-	// Load specs to get UUID and SHA1
-	data, err := os.ReadFile(specsFile)
-	if err != nil {
-		return fmt.Errorf("failed to read specs.json for %s@%s in registry %s: %v", packageName, versionTag, registryName, err)
-	}
-	var specs types.Specs
-	if err := json.Unmarshal(data, &specs); err != nil {
-		return fmt.Errorf("failed to parse specs.json for %s@%s: %v", packageName, versionTag, err)
-	}
-	if specs.Version != versionTag {
-		return fmt.Errorf("mismatched version in specs.json: expected %s, got %s", versionTag, specs.Version)
-	}
-	if specs.SHA1 == "" {
-		return fmt.Errorf("empty SHA1 in specs.json for %s@%s", packageName, versionTag)
+func MakePackageAvailable(cosmDir string, specs *types.Specs) error {
+	if err := validateSpecs(specs); err != nil {
+		return err
 	}
 
-	// Locate clone directory
+	destPath := filepath.Join(cosmDir, "packages", specs.Name, specs.SHA1)
+	if checkDestinationExists(destPath) {
+		return nil
+	}
+
 	clonePath := filepath.Join(cosmDir, "clones", specs.UUID)
-	if _, err := os.Stat(clonePath); os.IsNotExist(err) {
-		return fmt.Errorf("clone directory for UUID %s not found at %s", specs.UUID, clonePath)
+	if err := prepareClone(clonePath, specs.SHA1); err != nil {
+		return fmt.Errorf("failed to prepare clone for %s@%s: %v", specs.Name, specs.Version, err)
 	}
 
-	// Ensure clone is at the correct version
-	if err := checkoutVersion(clonePath, specs.SHA1); err != nil {
-		return fmt.Errorf("failed to checkout SHA1 %s for %s@%s: %v", specs.SHA1, packageName, versionTag, err)
-	}
-
-	// Create destination directory
-	destPath := filepath.Join(cosmDir, "packages", packageName, specs.SHA1)
-	if err := os.MkdirAll(destPath, 0755); err != nil {
+	if err := copyPackageFiles(clonePath, destPath); err != nil {
 		if revertErr := revertClone(clonePath); revertErr != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to revert clone after error: %v\n", revertErr)
 		}
+		return fmt.Errorf("failed to copy package files for %s@%s: %v", specs.Name, specs.Version, err)
+	}
+
+	if err := revertClone(clonePath); err != nil {
+		return fmt.Errorf("failed to revert clone for %s@%s: %v", specs.Name, specs.Version, err)
+	}
+
+	return nil
+}
+
+// validateSpecs ensures the Specs object has valid fields
+func validateSpecs(specs *types.Specs) error {
+	if specs.UUID == "" {
+		return fmt.Errorf("empty UUID in specs")
+	}
+	if specs.SHA1 == "" {
+		return fmt.Errorf("empty SHA1 in specs")
+	}
+	if specs.Version == "" {
+		return fmt.Errorf("empty version in specs")
+	}
+	if specs.Name == "" {
+		return fmt.Errorf("empty package name in specs")
+	}
+	return nil
+}
+
+// checkDestinationExists checks if the destination directory exists with Project.json
+func checkDestinationExists(destPath string) bool {
+	if _, err := os.Stat(destPath); os.IsNotExist(err) {
+		return false
+	}
+	projectFile := filepath.Join(destPath, "Project.json")
+	if _, err := os.Stat(projectFile); os.IsNotExist(err) {
+		return false
+	}
+	return true
+}
+
+// prepareClone verifies the clone directory exists and checks out the specified SHA1
+func prepareClone(clonePath, sha1 string) error {
+	if _, err := os.Stat(clonePath); os.IsNotExist(err) {
+		return fmt.Errorf("clone directory not found at %s", clonePath)
+	}
+	if err := checkoutVersion(clonePath, sha1); err != nil {
+		return fmt.Errorf("failed to checkout SHA1 %s: %v", sha1, err)
+	}
+	return nil
+}
+
+// copyPackageFiles creates the destination directory and copies files, excluding Git-related ones
+func copyPackageFiles(clonePath, destPath string) error {
+	if err := os.MkdirAll(destPath, 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory %s: %v", destPath, err)
 	}
 
-	// Copy files, excluding Git-related ones
-	err = filepath.Walk(clonePath, func(srcPath string, info os.FileInfo, err error) error {
+	return filepath.Walk(clonePath, func(srcPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -107,17 +138,4 @@ func MakePackageAvailable(cosmDir, registryName, packageName, versionTag string)
 		// Copy file
 		return copyFile(srcPath, destFile, info.Mode())
 	})
-	if err != nil {
-		if revertErr := revertClone(clonePath); revertErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to revert clone after error: %v\n", revertErr)
-		}
-		return fmt.Errorf("failed to copy package files for %s@%s: %v", packageName, versionTag, err)
-	}
-
-	// Revert clone on success
-	if err := revertClone(clonePath); err != nil {
-		return fmt.Errorf("failed to revert clone for %s@%s: %v", packageName, versionTag, err)
-	}
-
-	return nil
 }

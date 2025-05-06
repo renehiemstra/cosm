@@ -198,6 +198,11 @@ func loadSpecs(registriesDir, registryName, packageName, version string) (types.
 // loadBuildList loads a package's build list from buildlist.json
 func loadBuildList(registriesDir, registryName, packageName, version string) (types.BuildList, error) {
 	buildListFile := filepath.Join(registriesDir, registryName, strings.ToUpper(string(packageName[0])), packageName, version, "buildlist.json")
+	return loadBuildListFile(buildListFile)
+}
+
+// loadBuildList loads a package's build list from buildlist.json
+func loadBuildListFile(buildListFile string) (types.BuildList, error) {
 	data, err := os.ReadFile(buildListFile)
 	if err != nil {
 		if os.IsNotExist(err) {

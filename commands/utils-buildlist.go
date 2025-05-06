@@ -95,6 +95,7 @@ func createDependencyEntry(depName, depVersion, depUUID string, specs types.Spec
 		Version: depVersion,
 		GitURL:  specs.GitURL,
 		SHA1:    specs.SHA1,
+		Path:    fmt.Sprintf("packages/%s/%s", depName, specs.SHA1),
 	}
 	return key, entry, nil
 }

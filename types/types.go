@@ -58,4 +58,5 @@ type BuildListDependency struct {
 	Version string `json:"version"`
 	GitURL  string `json:"giturl"`
 	SHA1    string `json:"sha1"`
+	Path    string `json:"path"`
 }

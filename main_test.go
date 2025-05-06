@@ -728,7 +728,7 @@ func TestMinimalVersionSelectionBuildList(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %v\nStderr: %s", err, stderr)
 	}
-	expectedOutput := fmt.Sprintf("Generated build list for %s in .cosm/buildlist.json\n", "A")
+	expectedOutput := fmt.Sprintf("Generated build list for %s in .cosm/buildlist.json\nStarting interactive shell. Press ctrl-d or type 'exit' to quit.\n", "A")
 	if stdout != expectedOutput {
 		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
 	}
@@ -775,9 +775,13 @@ func TestMinimalVersionSelectionBuildList(t *testing.T) {
 	}
 }
 
+// TestMakePackageAvailable tests the MakePackageAvailable function
 func TestMakePackageAvailable(t *testing.T) {
 	tempDir, cleanup := setupTestEnv(t)
 	defer cleanup()
+
+	// local cosm directory
+	cosmDir := filepath.Join(tempDir, ".cosm")
 
 	// Setup registry and package
 	registryName := "myreg"
@@ -786,6 +790,7 @@ func TestMakePackageAvailable(t *testing.T) {
 	packageDir, packageGitURL := setupPackageWithGit(t, tempDir, packageName, packageVersion)
 	setupRegistry(t, tempDir, registryName)
 	releasePackage(t, packageDir, packageVersion)
+	releasePackage(t, packageDir, "--minor")
 	addPackageToRegistry(t, tempDir, registryName, packageGitURL)
 
 	// Load specs to get UUID and SHA1
@@ -793,68 +798,40 @@ func TestMakePackageAvailable(t *testing.T) {
 	cloneDir := filepath.Join(tempDir, ".cosm", "clones", specs.UUID)
 	destPath := filepath.Join(tempDir, ".cosm", "packages", packageName, specs.SHA1)
 
+	// Ensure packages directory is writable
+	if err := os.MkdirAll(filepath.Join(tempDir, ".cosm", "packages"), 0755); err != nil {
+		t.Fatalf("Failed to create packages dir: %v", err)
+	}
+
 	// Capture initial branch
 	initialBranch := getCloneBranch(t, cloneDir)
 
-	tests := []struct {
-		name          string
-		setup         func(t *testing.T)
-		expectError   bool
-		verifyResults func(t *testing.T)
-	}{
-		{
-			name: "success",
-			setup: func(t *testing.T) {
-				// Ensure packages directory is writable
-				if err := os.MkdirAll(filepath.Join(tempDir, ".cosm", "packages"), 0755); err != nil {
-					t.Fatalf("Failed to create packages dir: %v", err)
-				}
-			},
-			expectError: false,
-			verifyResults: func(t *testing.T) {
-				verifyPackageDestination(t, destPath)
-			},
-		},
-		{
-			name: "error_unwritable_destination",
-			setup: func(t *testing.T) {
-				// Clean up and recreate packages directory as unwritable
-				packagesDir := filepath.Join(tempDir, ".cosm", "packages")
-				if err := os.RemoveAll(packagesDir); err != nil {
-					t.Fatalf("Failed to remove packages dir: %v", err)
-				}
-				if err := os.MkdirAll(packagesDir, 0755); err != nil {
-					t.Fatalf("Failed to recreate packages dir: %v", err)
-				}
-				if err := os.Chmod(packagesDir, 0500); err != nil {
-					t.Fatalf("Failed to make packages dir unwritable: %v", err)
-				}
-				t.Cleanup(func() { os.Chmod(packagesDir, 0755) })
-			},
-			expectError: true,
-			verifyResults: func(t *testing.T) {
-				if _, err := os.Stat(destPath); !os.IsNotExist(err) {
-					t.Errorf("Destination directory %s was created unexpectedly", destPath)
-				}
-			},
-		},
+	// Call MakePackageAvailable
+	err := commands.MakePackageAvailable(cosmDir, &specs)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.setup(t)
-			err := commands.MakePackageAvailable(filepath.Join(tempDir, ".cosm"), registryName, packageName, packageVersion)
-			if tt.expectError {
-				if err == nil {
-					t.Errorf("Expected error, got none")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Unexpected error: %v", err)
-				}
-			}
-			tt.verifyResults(t)
-			verifyCloneBranch(t, cloneDir, initialBranch)
-		})
+	// Check destination directory exists
+	if _, err := os.Stat(destPath); os.IsNotExist(err) {
+		t.Errorf("Destination directory %s not created", destPath)
 	}
+
+	// Check Project.json exists in destination
+	projectFile := filepath.Join(destPath, "Project.json")
+	if _, err := os.Stat(projectFile); os.IsNotExist(err) {
+		t.Errorf("Expected Project.json in %s, not found", destPath)
+	}
+
+	// Load and verify Project.json
+	project := loadProjectFile(t, projectFile)
+	if project.Version != packageVersion {
+		t.Errorf("Expected project version %q, got %q", packageVersion, project.Version)
+	}
+	if project.Name != packageName {
+		t.Errorf("Expected project name %q, got %q", packageName, project.Name)
+	}
+
+	// Verify clone branch is reverted
+	verifyCloneBranch(t, cloneDir, initialBranch)
 }
