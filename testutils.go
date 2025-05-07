@@ -146,7 +146,9 @@ func setupTestEnv(t *testing.T) (tempDir string, cleanup func()) {
 	tempDir = t.TempDir()
 	os.Setenv("HOME", tempDir)
 	_ = setupTempGitConfig(t, tempDir)
-	cleanup = func() { os.Unsetenv("HOME") }
+	os.Setenv("COSM_DEPOT_PATH", filepath.Join(tempDir, ".cosm"))
+	commands.InitializeCosm()
+	cleanup = func() { os.Unsetenv("HOME"); os.Unsetenv("COSM_DEPOT_PATH") }
 	return tempDir, cleanup
 }
 
