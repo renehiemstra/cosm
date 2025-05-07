@@ -1,0 +1,80 @@
+name: CI/CD for Cosm Terminal App
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+        exclude:
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Run tests
+        run: go test ./... -v
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -o cosm-${{ matrix.goos }}-${{ matrix.goarch }} -ldflags "-X main.version=${{ github.ref_name }}"
+          chmod +x cosm-${{ matrix.goos }}-${{ matrix.goarch }}
+
+      - name: Archive binary
+        run: |
+          if [ "${{ matrix.goos }}" = "linux" ]; then
+            tar -czvf cosm-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz cosm-${{ matrix.goos }}-${{ matrix.goarch }}
+          else
+            zip cosm-${{ matrix.goos }}-${{ matrix.goarch }}.zip cosm-${{ matrix.goos }}-${{ matrix.goarch }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosm-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            cosm-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+            cosm-${{ matrix.goos }}-${{ matrix.goarch }}.zip
+
+  release:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/cosm-linux-amd64/cosm-linux-amd64.tar.gz
+            artifacts/cosm-darwin-amd64/cosm-darwin-amd64.zip
+            artifacts/cosm-darwin-arm64/cosm-darwin-arm64.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
