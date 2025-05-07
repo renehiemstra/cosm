@@ -40,77 +40,37 @@ func getRegistriesDir() (string, error) {
 // initializeCosmDir sets up the .cosm directory with essential files and folders
 func InitializeCosm() error {
 
-	// If COSM_DEPOT_PATH is set and valid, skip initialization
-	if verifyCosmDepot() {
+	validDepotVar := verifyCosmDepotVar()
+	validDepotDir := verifyCosmDepot()
+
+	// If COSM_DEPOT_PATH is set and the direcory is valid, skip initialization
+	if validDepotVar && validDepotDir {
 		return nil
 	}
 
-	// Create .cosm directory
-	if err := initializeCosmDepotPath(); err != nil {
-		return err
-	}
-
-	// get the cosm depot path
-	cosmDir, err := getCosmDir()
-	if err != nil {
-		return fmt.Errorf("failed to get cosm directory: %v", err)
-	}
-
-	// Create registries directory
-	registriesDir := setupRegistriesDir(cosmDir)
-	if err := os.MkdirAll(registriesDir, 0755); err != nil {
-		return fmt.Errorf("failed to create registries directory %s: %v", registriesDir, err)
-	}
-
-	// Create empty registries.json if it doesn't exist
-	registriesFile := filepath.Join(registriesDir, "registries.json")
-	if _, err := os.Stat(registriesFile); os.IsNotExist(err) {
-		if err := os.WriteFile(registriesFile, []byte("[]"), 0644); err != nil {
-			return fmt.Errorf("failed to create registries.json: %v", err)
+	if !validDepotVar {
+		if err := initializeCosmDepotVar(); err != nil {
+			return err
 		}
-	} else if err != nil {
-		return fmt.Errorf("failed to stat registries.json: %v", err)
 	}
 
-	// Create and initialize templates directory
-	templatesDir := filepath.Join(cosmDir, "templates")
-	// Clone cosm-templates repository
-	if _, err := clone("https://github.com/simkinetic/cosm-templates.git", templatesDir); err != nil {
-		return fmt.Errorf("failed to clone cosm-templates repository: %v", err)
-	}
-
-	// Create clones directory
-	clonesDir := filepath.Join(cosmDir, "clones")
-	if err := os.MkdirAll(clonesDir, 0755); err != nil {
-		return fmt.Errorf("failed to create clones directory %s: %v", clonesDir, err)
-	}
-
-	// Create packages directory
-	packagesDir := filepath.Join(cosmDir, "packages")
-	if err := os.MkdirAll(packagesDir, 0755); err != nil {
-		return fmt.Errorf("failed to create packages directory %s: %v", packagesDir, err)
+	if !validDepotDir {
+		if err := initializeCosmDepot(); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
 // verifyCosmDepot checks if COSM_DEPOT_PATH is set and verifies the .cosm directory structure
-func verifyCosmDepotPath() bool {
+func verifyCosmDepotVar() bool {
 	depotPath := os.Getenv("COSM_DEPOT_PATH")
-	if depotPath == "" {
-		return false
-	}
-
-	// Verify directory exists
-	if _, err := os.Stat(depotPath); err != nil {
-		return false
-	}
-
-	return true
+	return depotPath != ""
 }
 
 // verifyCosmDepot checks if COSM_DEPOT_PATH is set and verifies the .cosm directory structure
-func verifyCosmDepotDir() bool {
+func verifyCosmDepot() bool {
 	depotPath := os.Getenv("COSM_DEPOT_PATH")
 	if depotPath == "" {
 		return false
@@ -145,7 +105,7 @@ func verifyCosmDepotDir() bool {
 }
 
 // initializeCosmDepot prompts for and sets COSM_DEPOT_PATH if unset or invalid, updating the shell profile
-func initializeCosmDepotPath() error {
+func initializeCosmDepotVar() error {
 
 	// Get default .cosm path
 	homeDir, err := os.UserHomeDir()
@@ -201,6 +161,53 @@ func initializeCosmDepotPath() error {
 	// Print confirmation with export instruction
 	fmt.Printf("COSM_DEPOT_PATH set to %s and added to shell profile\n", depotPath)
 	fmt.Printf("To apply COSM_DEPOT_PATH in the current session, run: export COSM_DEPOT_PATH=%q\n", depotPath)
+	return nil
+}
+
+// initializeCosmDir sets up the .cosm directory with essential files and folders
+func initializeCosmDepot() error {
+
+	// get the cosm depot path
+	cosmDir, err := getCosmDir()
+	if err != nil {
+		return fmt.Errorf("failed to get cosm directory: %v", err)
+	}
+
+	// Create registries directory
+	registriesDir := setupRegistriesDir(cosmDir)
+	if err := os.MkdirAll(registriesDir, 0755); err != nil {
+		return fmt.Errorf("failed to create registries directory %s: %v", registriesDir, err)
+	}
+
+	// Create empty registries.json if it doesn't exist
+	registriesFile := filepath.Join(registriesDir, "registries.json")
+	if _, err := os.Stat(registriesFile); os.IsNotExist(err) {
+		if err := os.WriteFile(registriesFile, []byte("[]"), 0644); err != nil {
+			return fmt.Errorf("failed to create registries.json: %v", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to stat registries.json: %v", err)
+	}
+
+	// Create and initialize templates directory
+	templatesDir := filepath.Join(cosmDir, "templates")
+	// Clone cosm-templates repository
+	if _, err := clone("https://github.com/simkinetic/cosm-templates.git", templatesDir); err != nil {
+		return fmt.Errorf("failed to clone cosm-templates repository: %v", err)
+	}
+
+	// Create clones directory
+	clonesDir := filepath.Join(cosmDir, "clones")
+	if err := os.MkdirAll(clonesDir, 0755); err != nil {
+		return fmt.Errorf("failed to create clones directory %s: %v", clonesDir, err)
+	}
+
+	// Create packages directory
+	packagesDir := filepath.Join(cosmDir, "packages")
+	if err := os.MkdirAll(packagesDir, 0755); err != nil {
+		return fmt.Errorf("failed to create packages directory %s: %v", packagesDir, err)
+	}
+
 	return nil
 }
 
