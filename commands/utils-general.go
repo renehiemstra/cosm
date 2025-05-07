@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-const Version = "0.1.0" // Move the version constant here
-
 // runCommand executes a command in the specified directory, returning the output and any error.
 // The command is provided as a slice of arguments (e.g., []string{"git", "checkout", "-"}).
 func runCommand(dir string, args ...string) (string, error) {

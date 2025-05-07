@@ -171,6 +171,7 @@ func createEnvironmentFiles() error {
 func generateEnvironmentVariables(cosmDir string, buildList *types.BuildList) error {
 	// Construct TERRA_PATH
 	var terraPaths []string
+	terraPaths = append(terraPaths, "src/?.t")
 	for _, dep := range buildList.Dependencies {
 		if dep.Path != "" {
 			pathVar := filepath.Join(cosmDir, dep.Path, "src", "?.t")

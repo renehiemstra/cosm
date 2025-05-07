@@ -2,16 +2,9 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 )
-
-// PrintVersion prints the version of the cosm tool and exits
-func PrintVersion() {
-	fmt.Printf("cosm version %s\n", Version)
-	os.Exit(0)
-}
 
 // validateVersion ensures the version starts with 'v'
 func validateVersion(version string) error {

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"cosm/types"
 	"encoding/json"
 	"fmt"
@@ -15,22 +16,12 @@ func setupRegistriesDir(cosmDir string) string {
 	return filepath.Join(cosmDir, "registries")
 }
 
-// getGlobalCosmDir returns the global .cosm directory in the user's home directory
-func getGlobalCosmDir() (string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get user home directory: %v", err)
-	}
-	return filepath.Join(homeDir, ".cosm"), nil
-}
-
-// getCosmDir retrieves the global .cosm directory
+// getCosmDir returns the .cosm directory path from COSM_DEPOT_PATH, or an error if unset
 func getCosmDir() (string, error) {
-	cosmDir, err := getGlobalCosmDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get global .cosm directory: %v", err)
+	if depotPath := os.Getenv("COSM_DEPOT_PATH"); depotPath != "" {
+		return depotPath, nil
 	}
-	return cosmDir, nil
+	return "", fmt.Errorf("COSM_DEPOT_PATH environment variable is not set")
 }
 
 // getRegistriesDir returns the registries directory within the .cosm directory
@@ -44,6 +35,221 @@ func getRegistriesDir() (string, error) {
 		return "", fmt.Errorf("failed to create registries directory %s: %v", registriesDir, err)
 	}
 	return registriesDir, nil
+}
+
+// initializeCosmDir sets up the .cosm directory with essential files and folders
+func InitializeCosm() error {
+
+	// If COSM_DEPOT_PATH is set and valid, skip initialization
+	if verifyCosmDepot() {
+		return nil
+	}
+
+	// Create .cosm directory
+	if err := initializeCosmDepotPath(); err != nil {
+		return err
+	}
+
+	// get the cosm depot path
+	cosmDir, err := getCosmDir()
+	if err != nil {
+		return fmt.Errorf("failed to get cosm directory: %v", err)
+	}
+
+	// Create registries directory
+	registriesDir := setupRegistriesDir(cosmDir)
+	if err := os.MkdirAll(registriesDir, 0755); err != nil {
+		return fmt.Errorf("failed to create registries directory %s: %v", registriesDir, err)
+	}
+
+	// Create empty registries.json if it doesn't exist
+	registriesFile := filepath.Join(registriesDir, "registries.json")
+	if _, err := os.Stat(registriesFile); os.IsNotExist(err) {
+		if err := os.WriteFile(registriesFile, []byte("[]"), 0644); err != nil {
+			return fmt.Errorf("failed to create registries.json: %v", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to stat registries.json: %v", err)
+	}
+
+	// Create and initialize templates directory
+	templatesDir := filepath.Join(cosmDir, "templates")
+	// Clone cosm-templates repository
+	if _, err := clone("https://github.com/simkinetic/cosm-templates.git", templatesDir); err != nil {
+		return fmt.Errorf("failed to clone cosm-templates repository: %v", err)
+	}
+
+	// Create clones directory
+	clonesDir := filepath.Join(cosmDir, "clones")
+	if err := os.MkdirAll(clonesDir, 0755); err != nil {
+		return fmt.Errorf("failed to create clones directory %s: %v", clonesDir, err)
+	}
+
+	// Create packages directory
+	packagesDir := filepath.Join(cosmDir, "packages")
+	if err := os.MkdirAll(packagesDir, 0755); err != nil {
+		return fmt.Errorf("failed to create packages directory %s: %v", packagesDir, err)
+	}
+
+	return nil
+}
+
+// verifyCosmDepot checks if COSM_DEPOT_PATH is set and verifies the .cosm directory structure
+func verifyCosmDepotPath() bool {
+	depotPath := os.Getenv("COSM_DEPOT_PATH")
+	if depotPath == "" {
+		return false
+	}
+
+	// Verify directory exists
+	if _, err := os.Stat(depotPath); err != nil {
+		return false
+	}
+
+	return true
+}
+
+// verifyCosmDepot checks if COSM_DEPOT_PATH is set and verifies the .cosm directory structure
+func verifyCosmDepotDir() bool {
+	depotPath := os.Getenv("COSM_DEPOT_PATH")
+	if depotPath == "" {
+		return false
+	}
+
+	// Verify directory exists
+	if _, err := os.Stat(depotPath); err != nil {
+		return false
+	}
+
+	// Verify required subdirectories
+	requiredDirs := []string{
+		"registries",
+		"templates",
+		"clones",
+		"packages",
+	}
+	for _, dir := range requiredDirs {
+		dirPath := filepath.Join(depotPath, dir)
+		if _, err := os.Stat(dirPath); err != nil {
+			return false
+		}
+	}
+
+	// Verify registries.json
+	registriesFile := filepath.Join(depotPath, "registries", "registries.json")
+	if _, err := os.Stat(registriesFile); err != nil {
+		return false
+	}
+
+	return true
+}
+
+// initializeCosmDepot prompts for and sets COSM_DEPOT_PATH if unset or invalid, updating the shell profile
+func initializeCosmDepotPath() error {
+
+	// Get default .cosm path
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %v", err)
+	}
+	defaultPath := filepath.Join(homeDir, ".cosm")
+
+	// Prompt for location
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("COSM_DEPOT_PATH is not set or invalid. Enter the location for the .cosm directory (default: %s): ", defaultPath)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read input: %v", err)
+	}
+	input = strings.TrimSpace(input)
+
+	// Use default if input is empty
+	depotPath := defaultPath
+	if input != "" {
+		depotPath = filepath.Clean(input)
+		if !filepath.IsAbs(depotPath) {
+			depotPath, err = filepath.Abs(depotPath)
+			if err != nil {
+				return fmt.Errorf("failed to resolve absolute path for %s: %v", input, err)
+			}
+		}
+	}
+
+	// Check if depotPath already exists
+	if _, err := os.Stat(depotPath); !os.IsNotExist(err) {
+		if err != nil {
+			return fmt.Errorf("failed to check if %s exists: %v", depotPath, err)
+		}
+		return fmt.Errorf("directory %s already exists; please choose a new location", depotPath)
+	}
+
+	// Set COSM_DEPOT_PATH for the current process
+	if err := os.Setenv("COSM_DEPOT_PATH", depotPath); err != nil {
+		return fmt.Errorf("failed to set COSM_DEPOT_PATH: %v", err)
+	}
+
+	// Create the cosm depot path
+	if err := os.MkdirAll(depotPath, 0755); err != nil {
+		return fmt.Errorf("failed to create cosm depot path %s: %v", depotPath, err)
+	}
+
+	// Update shell profile
+	if err := updateShellProfile(depotPath); err != nil {
+		return fmt.Errorf("failed to update shell profile: %v", err)
+	}
+
+	// Print confirmation with export instruction
+	fmt.Printf("COSM_DEPOT_PATH set to %s and added to shell profile\n", depotPath)
+	fmt.Printf("To apply COSM_DEPOT_PATH in the current session, run: export COSM_DEPOT_PATH=%q\n", depotPath)
+	return nil
+}
+
+// updateShellProfile appends the COSM_DEPOT_PATH export to the user's shell profile
+func updateShellProfile(depotPath string) error {
+	profilePath, err := getShellProfilePath()
+	if err != nil {
+		return err
+	}
+
+	// Check if COSM_DEPOT_PATH is already set in the profile
+	content, err := os.ReadFile(profilePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to read shell profile %s: %v", profilePath, err)
+	}
+	if strings.Contains(string(content), "export COSM_DEPOT_PATH=") {
+		return nil // Already set
+	}
+
+	// Append export statement
+	f, err := os.OpenFile(profilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open shell profile %s: %v", profilePath, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(fmt.Sprintf("\nexport COSM_DEPOT_PATH=%q\n", depotPath)); err != nil {
+		return fmt.Errorf("failed to write to shell profile %s: %v", profilePath, err)
+	}
+
+	return nil
+}
+
+// getShellProfilePath determines the appropriate shell profile file (.bash_profile or .zprofile)
+func getShellProfilePath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %v", err)
+	}
+
+	// Check shell type
+	shell := os.Getenv("SHELL")
+	var profilePath string
+	if strings.Contains(shell, "zsh") {
+		profilePath = filepath.Join(homeDir, ".zprofile")
+	} else {
+		profilePath = filepath.Join(homeDir, ".bash_profile")
+	}
+
+	return profilePath, nil
 }
 
 // loadRegistryNames loads the list of registry names from registries.json

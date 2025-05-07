@@ -61,7 +61,7 @@ func setupAndParseInitArgs(args []string) (string, string, string, error) {
 		return "", "", "", fmt.Errorf("git URL cannot be empty")
 	}
 
-	cosmDir, err := getGlobalCosmDir()
+	cosmDir, err := getCosmDir()
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to get global .cosm directory: %v", err)
 	}
