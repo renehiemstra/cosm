@@ -49,7 +49,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var version string // Populated by -ldflags during build
+
+// PrintVersion prints the version of the cosm tool and exits
+func PrintVersion() {
+	fmt.Printf("cosm version %s\n", version)
+	os.Exit(0)
+}
+
 func main() {
+
+	// Initialize COSM_DEPOT_PATH
+	if err := commands.InitializeCosm(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to initialize COSM_DEPOT_PATH: %v\n", err)
+		os.Exit(1)
+	}
+
 	var rootCmd = &cobra.Command{
 		Use:   "cosm",
 		Short: "A cosmic package manager",
@@ -62,7 +77,7 @@ func main() {
 	rootCmd.Flags().BoolVarP(&versionFlag, "version", "v", false, "Print the version number")
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		if versionFlag {
-			commands.PrintVersion()
+			PrintVersion()
 		}
 	}
 
