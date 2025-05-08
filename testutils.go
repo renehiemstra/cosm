@@ -271,34 +271,30 @@ func removeFromRegistry(t *testing.T, dir, registryName, packageName string, ver
 	}
 }
 
-// commitAndPushPackageChanges stages, commits, and pushes changes in the package directory
-func commitAndPushPackageChanges(t *testing.T, packageDir, commitMsg string) {
+// commitAndPushPackageChanges commits and pushes changes in the package directory
+func commitAndPushPackageChanges(t *testing.T, packageDir, commitMessage string) {
 	t.Helper()
-	currentDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	if err := os.Chdir(packageDir); err != nil {
-		t.Fatalf("Failed to change to package directory %s: %v", packageDir, err)
-	}
-	defer os.Chdir(currentDir)
-
-	addCmd := exec.Command("git", "add", ".")
-	addOutput, err := addCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("Failed to stage changes in %s: %v\nOutput: %s", packageDir, err, addOutput)
+	// Stage all changes
+	cmd := exec.Command("git", "add", ".")
+	cmd.Dir = packageDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to stage changes in %s: %v", packageDir, err)
 	}
 
-	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
-	commitOutput, err := commitCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("Failed to commit changes in %s: %v\nOutput: %s", packageDir, err, commitOutput)
+	// Commit changes
+	cmd = exec.Command("git", "commit", "-m", commitMessage)
+	cmd.Dir = packageDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to commit changes in %s: %v", packageDir, err)
 	}
 
-	pushCmd := exec.Command("git", "push", "origin", "main")
-	pushOutput, err := pushCmd.CombinedOutput()
+	// Push to origin main
+	cmd = exec.Command("git", "push", "origin", "main")
+	cmd.Dir = packageDir
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("Failed to push changes to origin/main in %s: %v\nOutput: %s", packageDir, err, pushOutput)
+		t.Logf("Git push failed in %s: %v\nOutput:\n%s", packageDir, err, string(output))
+		t.Fatalf("Failed to push main for %s: %v", filepath.Base(packageDir), err)
 	}
 }
 
