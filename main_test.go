@@ -13,6 +13,8 @@ import (
 	"cosm/types"
 )
 
+var appVersion string
+
 func init() {
 	var err error
 	projectRoot, err = filepath.Abs(".")
@@ -28,7 +30,7 @@ func TestMain(m *testing.M) {
 	tempDir := os.TempDir()
 	binaryPath = filepath.Join(tempDir, "cosm")
 
-	cmd := exec.Command("go", "build", "-o", binaryPath, "main.go")
+	cmd := exec.Command("go", "build", "-o", binaryPath, "-ldflags", "-X main.appVersion="+version, "-v", ".")
 	if err := cmd.Run(); err != nil {
 		println("Failed to build cosm binary:", err.Error())
 		os.Exit(1)
@@ -38,11 +40,24 @@ func TestMain(m *testing.M) {
 	// os.Remove(binaryPath) // Uncomment to clean up
 	os.Exit(exitCode)
 }
-
 func TestVersion(t *testing.T) {
-	tempDir := t.TempDir()
-	stdout, _, err := runCommand(t, tempDir, "--version")
-	checkOutput(t, stdout, "", "cosm version 0.1.0\n", err, false, 0)
+	_, cleanup := setupTestEnv(t)
+	defer cleanup()
+
+	// Run the pre-built binary with --version
+	cmd := exec.Command(binaryPath, "--version")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		t.Fatalf("Failed to run command: %v (stderr: %s)", err, stderr.String())
+	}
+	expected := "cosm version " + appVersion + "\n"
+	if got := out.String(); got != expected {
+		t.Errorf("Expected output %q, got %q (stderr: %q)", expected, got, stderr.String())
+	}
 }
 
 func TestStatus(t *testing.T) {
