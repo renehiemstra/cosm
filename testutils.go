@@ -88,6 +88,9 @@ func setupPackageWithGit(t *testing.T, tempDir, packageName, version string) (st
 	if err := exec.Command("git", "commit", "-m", "Initial commit").Run(); err != nil {
 		t.Fatalf("Failed to commit for %s: %v", packageName, err)
 	}
+	if err := exec.Command("git", "branch", "-m", "main").Run(); err != nil {
+		t.Fatalf("Failed to set main branch for %s: %v", packageName, err)
+	}
 	bareRepoURL := createBareRepo(t, tempDir, packageName+".git")
 	if err := exec.Command("git", "remote", "add", "origin", bareRepoURL).Run(); err != nil {
 		t.Fatalf("Failed to add remote for %s: %v", packageName, err)
