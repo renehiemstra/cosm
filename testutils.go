@@ -92,7 +92,11 @@ func setupPackageWithGit(t *testing.T, tempDir, packageName, version string) (st
 	if err := exec.Command("git", "remote", "add", "origin", bareRepoURL).Run(); err != nil {
 		t.Fatalf("Failed to add remote for %s: %v", packageName, err)
 	}
-	if err := exec.Command("git", "push", "origin", "main").Run(); err != nil {
+	cmd := exec.Command("git", "push", "origin", "main")
+	cmd.Dir = packageDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("Git push failed for %s: %v\nOutput:\n%s", packageName, err, string(output))
 		t.Fatalf("Failed to push main for %s: %v", packageName, err)
 	}
 
