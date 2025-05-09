@@ -132,9 +132,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/cosm-linux-amd64/cosm-linux-amd64.tar.gz
-            artifacts/cosm-darwin-amd64/cosm-darwin-amd64.zip
-            artifacts/cosm-darwin-arm64/cosm-darwin-arm64.zip
+            artifacts/cosm-linux-amd64.tar.gz
+            artifacts/cosm-darwin-amd64.zip
+            artifacts/cosm-darwin-arm64.zip
           draft: false
           prerelease: false
         env:
