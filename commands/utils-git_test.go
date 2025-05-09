@@ -65,7 +65,7 @@ func TestClone_Success(t *testing.T) {
 	}
 
 	// Initialize local repository
-	if _, err := gitCommand(localDir, "init"); err != nil {
+	if _, err := GitCommand(localDir, "init"); err != nil {
 		t.Fatalf("Failed to init local Git repo in %s: %v", localDir, err)
 	}
 
@@ -74,13 +74,13 @@ func TestClone_Success(t *testing.T) {
 	if err := os.WriteFile(projectFile, []byte(`{"name": "test", "uuid": "1234"}`), 0644); err != nil {
 		t.Fatalf("Failed to create Project.json in %s: %v", localDir, err)
 	}
-	if _, err := gitCommand(localDir, "add", "Project.json"); err != nil {
+	if _, err := GitCommand(localDir, "add", "Project.json"); err != nil {
 		t.Fatalf("Failed to add Project.json in %s: %v", localDir, err)
 	}
-	if _, err := gitCommand(localDir, "commit", "-m", "Initial commit"); err != nil {
+	if _, err := GitCommand(localDir, "commit", "-m", "Initial commit"); err != nil {
 		t.Fatalf("Failed to commit in %s: %v", localDir, err)
 	}
-	if _, err := gitCommand(localDir, "branch", "-m", "main"); err != nil {
+	if _, err := GitCommand(localDir, "branch", "-m", "main"); err != nil {
 		t.Fatalf("Failed to set main branch in %s: %v", localDir, err)
 	}
 
@@ -90,18 +90,18 @@ func TestClone_Success(t *testing.T) {
 	}
 
 	// Initialize bare repository and set HEAD
-	if _, err := gitCommand(bareDir, "init", "--bare"); err != nil {
+	if _, err := GitCommand(bareDir, "init", "--bare"); err != nil {
 		t.Fatalf("Failed to init bare Git repo in %s: %v", bareDir, err)
 	}
-	if _, err := gitCommand(bareDir, "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+	if _, err := GitCommand(bareDir, "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
 		t.Fatalf("Failed to set HEAD in bare repo %s: %v", bareDir, err)
 	}
 
 	// Add bare repository as remote and push
-	if _, err := gitCommand(localDir, "remote", "add", "origin", bareDir); err != nil {
+	if _, err := GitCommand(localDir, "remote", "add", "origin", bareDir); err != nil {
 		t.Fatalf("Failed to add remote in %s: %v", localDir, err)
 	}
-	if output, err := gitCommand(localDir, "push", "origin", "main"); err != nil {
+	if output, err := GitCommand(localDir, "push", "origin", "main"); err != nil {
 		t.Fatalf("Failed to push to bare repo from %s: %v\nOutput: %s", localDir, err, output)
 	}
 
