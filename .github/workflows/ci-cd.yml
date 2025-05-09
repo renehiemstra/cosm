@@ -16,7 +16,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-14, macos-12]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -32,13 +32,20 @@ jobs:
           git config --global user.email "actions@github.com"
 
       - name: Run tests
-        run: go test ./... -v
+        run: |
+          if [ "${{ matrix.os }}" = "macos-14" ]; then
+            GOARCH=arm64 go test ./... -v
+          else
+            GOARCH=amd64 go test ./... -v
+          fi
 
   build-and-release:
     name: Build and Release
     needs: test
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Grant write access for creating releases
     strategy:
       matrix:
         goos: [linux, darwin]
@@ -87,14 +94,25 @@ jobs:
             cosm-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
             cosm-${{ matrix.goos }}-${{ matrix.goarch }}.zip
 
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts for debugging
+        run: |
+          ls -R artifacts
+          echo "Current directory contents:"
+          ls -R
+
       - name: Create Release
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'  # Run release only once
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            cosm-linux-amd64/cosm-linux-amd64.tar.gz
-            cosm-darwin-amd64/cosm-darwin-amd64.zip
-            cosm-darwin-arm64/cosm-darwin-arm64.zip
+            artifacts/cosm-linux-amd64/cosm-linux-amd64.tar.gz
+            artifacts/cosm-darwin-amd64/cosm-darwin-amd64.zip
+            artifacts/cosm-darwin-arm64/cosm-darwin-arm64.zip
           draft: false
           prerelease: false
         env:
