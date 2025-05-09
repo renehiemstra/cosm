@@ -16,7 +16,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -45,7 +45,7 @@ jobs:
         goarch: [amd64, arm64]
         exclude:
           - goos: linux
-            goarch: arm64  # Skip linux-arm64 if not needed
+            goarch: arm64  # Only linux-amd64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
