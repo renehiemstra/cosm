@@ -3,20 +3,20 @@ name: CI/CD for Cosm Terminal App
 on:
   push:
     branches:
-      - main
+      - '**'  # Run tests on all branches
     tags:
-      - "v*"
+      - 'v*'  # Run build and release for tagged versions
   pull_request:
     branches:
-      - main
+      - '**'  # Run tests on pull requests to all branches
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
+  test:
+    name: Run Tests
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        goos: [linux, darwin]
-        goarch: [amd64, arm64]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -24,7 +24,41 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21"
+          go-version: '1.21'
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+      - name: Run tests
+        run: go test ./... -v
+
+  build-and-release:
+    name: Build and Release
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: linux
+            goarch: arm64  # Skip linux-arm64 if not needed
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
 
       - name: Run tests
         run: go test ./... -v
@@ -53,26 +87,14 @@ jobs:
             cosm-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
             cosm-${{ matrix.goos }}-${{ matrix.goarch }}.zip
 
-  release:
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
       - name: Create Release
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'  # Run release only once
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/cosm-linux-amd64/cosm-linux-amd64.tar.gz
-            artifacts/cosm-darwin-amd64/cosm-darwin-amd64.zip
-            artifacts/cosm-darwin-arm64/cosm-darwin-arm64.zip
+            cosm-linux-amd64/cosm-linux-amd64.tar.gz
+            cosm-darwin-amd64/cosm-darwin-amd64.zip
+            cosm-darwin-arm64/cosm-darwin-arm64.zip
           draft: false
           prerelease: false
         env:
