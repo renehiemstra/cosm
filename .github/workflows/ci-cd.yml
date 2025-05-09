@@ -124,7 +124,7 @@ jobs:
       - name: List artifacts for debugging
         run: |
           echo "Artifact directory structure:"
-          ls -lR artifacts
+          find artifacts -type f -ls
           echo "Current directory contents:"
           ls -lR
 
