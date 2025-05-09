@@ -102,68 +102,19 @@ func setupPackageWithGit(t *testing.T, tempDir, packageName, version string) (st
 	}
 	cmd := exec.Command("git", "push", "origin", "main")
 	cmd.Dir = packageDir
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Logf("Git push failed for %s: %v\nOutput:\n%s", packageName, err, string(output))
 		t.Fatalf("Failed to push main for %s: %v", packageName, err)
 	}
-	// Log package directory contents
-	dirEntries, err := os.ReadDir(packageDir)
-	if err != nil {
-		t.Fatalf("Failed to read package dir %s: %v", packageDir, err)
-	}
-	t.Logf("Package directory %s contents:", packageDir)
-	for _, entry := range dirEntries {
-		t.Logf("  %s", entry.Name())
-	}
-	// Log bare repository contents
-	bareRepoDir := strings.TrimPrefix(bareRepoURL, "file://")
-	bareEntries, err := os.ReadDir(bareRepoDir)
-	if err != nil {
-		t.Fatalf("Failed to read bare repo dir %s: %v", bareRepoDir, err)
-	}
-	t.Logf("Bare repository %s contents:", bareRepoDir)
-	for _, entry := range bareEntries {
-		t.Logf("  %s", entry.Name())
-	}
-
 	return packageDir, bareRepoURL
 }
 
 // addPackageToRegistry adds a package to a registry using cosm registry add
 func addPackageToRegistry(t *testing.T, tempDir, registryName, packageGitURL string) (string, string) {
-	// Log clone directory before command
-	cloneDir := filepath.Join(tempDir, ".cosm", "clones", "tmp-clone")
-	if _, err := os.Stat(cloneDir); !os.IsNotExist(err) {
-		dirEntries, err := os.ReadDir(cloneDir)
-		if err != nil {
-			t.Logf("Failed to read clone dir %s: %v", cloneDir, err)
-		} else {
-			t.Logf("Clone directory %s contents before registry add:", cloneDir)
-			for _, entry := range dirEntries {
-				t.Logf("  %s", entry.Name())
-			}
-		}
-	} else {
-		t.Logf("Clone directory %s does not exist before registry add", cloneDir)
-	}
-
 	stdout, stderr, err := runCommand(t, tempDir, "registry", "add", registryName, packageGitURL)
 	if err != nil {
 		t.Fatalf("Failed to add package to registry '%s': %v\nStderr: %s", registryName, err, stderr)
 	}
-
-	// Log clone directory after command
-	dirEntries, err := os.ReadDir(cloneDir)
-	if err != nil {
-		t.Logf("Failed to read clone dir %s: %v", cloneDir, err)
-	} else {
-		t.Logf("Clone directory %s contents after registry add:", cloneDir)
-		for _, entry := range dirEntries {
-			t.Logf("  %s", entry.Name())
-		}
-	}
-
 	return stdout, stderr
 }
 
@@ -215,9 +166,16 @@ func setupTestEnv(t *testing.T) (tempDir string, cleanup func()) {
 func createBareRepo(t *testing.T, dir string, name string) string {
 	t.Helper()
 	bareRepoPath := filepath.Join(dir, name)
-	if err := exec.Command("git", "init", "--bare", bareRepoPath).Run(); err != nil {
-		t.Fatalf("Failed to initialize bare Git repo at %s: %v", bareRepoPath, err)
+	if err := os.Mkdir(bareRepoPath, 0755); err != nil {
+		t.Fatalf("Failed to create package dir %s: %v", bareRepoPath, err)
 	}
+	if _, err := commands.GitCommand(bareRepoPath, "init", "--bare"); err != nil {
+		t.Fatalf("Failed to init bare Git repo in %s: %v", bareRepoPath, err)
+	}
+	if _, err := commands.GitCommand(bareRepoPath, "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+		t.Fatalf("Failed to set HEAD in bare repo %s: %v", bareRepoPath, err)
+	}
+
 	return "file://" + bareRepoPath
 }
 

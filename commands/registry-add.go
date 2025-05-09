@@ -108,7 +108,7 @@ func addPackageWithAllVersions(config *addPackageConfig) error {
 	defer cleanupTempClone(config.clonePath)
 
 	// Fetch tags to ensure latest tags are available
-	if _, err := gitCommand(config.clonePath, "fetch", "--tags"); err != nil {
+	if _, err := GitCommand(config.clonePath, "fetch", "--tags"); err != nil {
 		return fmt.Errorf("failed to fetch tags for repository at '%s': %v", config.packageGitURL, err)
 	}
 
@@ -254,7 +254,7 @@ func moveCloneToPermanentDir(cosmDir, tmpClonePath, packageUUID string) (string,
 
 // validateAndCollectVersionTags fetches Git tags, or returns empty slice if none exist
 func validateAndCollectVersionTags(clonePath string) ([]string, error) {
-	tagOutput, err := gitCommand(clonePath, "tag")
+	tagOutput, err := GitCommand(clonePath, "tag")
 	if err != nil || len(strings.TrimSpace(tagOutput)) == 0 {
 		return []string{}, nil // No tags, return empty slice
 	}
@@ -321,7 +321,7 @@ func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL s
 			}
 
 			// Get SHA1 for the tag
-			sha1Output, err := gitCommand(clonePath, "rev-list", "-n", "1", tag)
+			sha1Output, err := GitCommand(clonePath, "rev-list", "-n", "1", tag)
 			if err != nil {
 				return fmt.Errorf("failed to get SHA1 for tag '%s': %v", tag, err)
 			}

@@ -96,8 +96,7 @@ func ensureDirectoryEmpty(dir, gitURL string) error {
 
 // cloneDir clones the repository into registries/<registryName> and returns the directory path.
 func cloneDir(registriesDir, registryName, gitURL string) (string, error) {
-	registrySubDir := filepath.Join(registriesDir, registryName)
-	return clone(gitURL, registrySubDir)
+	return clone(gitURL, registriesDir, registryName)
 }
 
 // updateRegistriesList adds the registry name to registries.json

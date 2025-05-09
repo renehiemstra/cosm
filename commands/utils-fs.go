@@ -37,6 +37,35 @@ func getRegistriesDir() (string, error) {
 	return registriesDir, nil
 }
 
+// SplitPathComponents takes a file path and returns its parent directory and directory/file name.
+// The parent directory is the directory containing the path, and the directory is the base name of the path.
+// Returns an error if the path is empty or invalid.
+func SplitPathComponents(path string) (parentDir, directory string, err error) {
+	if path == "" {
+		return "", "", fmt.Errorf("path cannot be empty")
+	}
+
+	// Clean the path to handle redundant separators and relative components
+	cleanPath := filepath.Clean(path)
+	if cleanPath == "." || cleanPath == "/" || cleanPath == string(filepath.Separator) {
+		return "", "", fmt.Errorf("invalid path: %s", path)
+	}
+
+	// Get the parent directory
+	parentDir = filepath.Dir(cleanPath)
+	if parentDir == "." {
+		parentDir = ""
+	}
+
+	// Get the base name (directory or file)
+	directory = filepath.Base(cleanPath)
+	if directory == "" {
+		return "", "", fmt.Errorf("invalid path: %s", path)
+	}
+
+	return parentDir, directory, nil
+}
+
 // initializeCosmDir sets up the .cosm directory with essential files and folders
 func InitializeCosm() error {
 
@@ -189,10 +218,8 @@ func initializeCosmDepot() error {
 		return fmt.Errorf("failed to stat registries.json: %v", err)
 	}
 
-	// Create and initialize templates directory
-	templatesDir := filepath.Join(cosmDir, "templates")
 	// Clone cosm-templates repository
-	if _, err := clone("https://github.com/simkinetic/cosm-templates.git", templatesDir); err != nil {
+	if _, err := clone("https://github.com/simkinetic/cosm-templates.git", cosmDir, "templates"); err != nil {
 		return fmt.Errorf("failed to clone cosm-templates repository: %v", err)
 	}
 

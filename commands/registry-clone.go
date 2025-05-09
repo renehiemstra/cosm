@@ -1,148 +1,140 @@
 package commands
 
 import (
-	"bufio"
-	"cosm/types"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"cosm/types"
+
 	"github.com/spf13/cobra"
 )
 
-// cloneRegistryConfig holds configuration for cloning a registry
-type cloneRegistryConfig struct {
-	gitURL        string
-	cosmDir       string
-	registriesDir string
-	registry      types.Registry
-	registryNames []string
-	registryPath  string
-}
-
 // RegistryClone clones a registry from a Git URL to the registries directory
 func RegistryClone(cmd *cobra.Command, args []string) error {
-	// Parse arguments and initialize config
-	config, err := parseCloneArgs(args)
+	// Validate and parse arguments
+	if len(args) != 1 {
+		return fmt.Errorf("exactly one argument required (e.g., cosm registry clone <giturl>)")
+	}
+	gitURL := args[0]
+	if gitURL == "" {
+		return fmt.Errorf("git URL cannot be empty")
+	}
+
+	// Initialize paths
+	cosmDir, err := getCosmDir()
+	if err != nil {
+		return fmt.Errorf("failed to get cosm directory: %v", err)
+	}
+	registriesDir := filepath.Join(cosmDir, "registries")
+	if err := os.MkdirAll(registriesDir, 0755); err != nil {
+		return fmt.Errorf("failed to create registries directory %s: %v", registriesDir, err)
+	}
+
+	// Step 1: Clone to temporary folder
+	tmpDir := filepath.Join(registriesDir, "tmp-registry-clone")
+	if err := cloneToTempRegistryDir(gitURL, registriesDir, tmpDir); err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir) // Ensure cleanup
+
+	// Step 2: Extract registry name
+	registryName, err := extractRegistryName(tmpDir)
 	if err != nil {
 		return err
 	}
 
-	// Load existing registry names
-	config.registryNames, err = loadRegistryNames(config.registriesDir)
+	// Step 3: Check if registry name exists
+	if err := checkRegistryNameDoesNotExist(registriesDir, registryName); err != nil {
+		return err
+	}
+
+	// Step 4: Move temporary folder to final location
+	finalDir := filepath.Join(registriesDir, registryName)
+	if err := moveTempToFinalRegistryDir(tmpDir, finalDir); err != nil {
+		return err
+	}
+
+	// Step 5: Add registry name to registries.json
+	if err := addRegistryNameToJSON(registriesDir, registryName); err != nil {
+		return err
+	}
+
+	// Step 6: Cleanup handled by defer
+	fmt.Printf("Cloned registry '%s' from %s\n", registryName, gitURL)
+	return nil
+}
+
+// cloneToTempRegistryDir clones the repository to a temporary directory
+func cloneToTempRegistryDir(gitURL, registriesDir, tmpDir string) error {
+	if err := os.RemoveAll(tmpDir); err != nil {
+		return fmt.Errorf("failed to remove existing temporary directory %s: %v", tmpDir, err)
+	}
+	if _, err := clone(gitURL, registriesDir, "tmp-registry-clone"); err != nil {
+		return fmt.Errorf("failed to clone repository from '%s' to %s: %v", gitURL, tmpDir, err)
+	}
+	return nil
+}
+
+// extractRegistryName reads registry.json and extracts the registry name
+func extractRegistryName(tmpDir string) (string, error) {
+	registryMetaFile := filepath.Join(tmpDir, "registry.json")
+	data, err := os.ReadFile(registryMetaFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to read %s from cloned repository: %v", registryMetaFile, err)
+	}
+	var registry types.Registry
+	if err := json.Unmarshal(data, &registry); err != nil {
+		return "", fmt.Errorf("failed to parse %s: %v", registryMetaFile, err)
+	}
+	if registry.Name == "" {
+		return "", fmt.Errorf("%s does not contain a valid registry name", registryMetaFile)
+	}
+	return registry.Name, nil
+}
+
+// checkRegistryNameDoesNotExist checks if the registry name exists in registries.json
+func checkRegistryNameDoesNotExist(registriesDir, registryName string) error {
+	registryNames, err := loadRegistryNames(registriesDir)
 	if err != nil {
 		if !os.IsNotExist(err) && !strings.Contains(err.Error(), "no registries available") {
 			return fmt.Errorf("failed to load registry names: %v", err)
 		}
-		config.registryNames = []string{} // Initialize empty list if registries.json is missing or empty
+		registryNames = []string{}
 	}
-
-	// Validate cloned registry
-	if err := validateClonedRegistry(config); err != nil {
-		return err
-	}
-
-	// Prompt for overwrite if registry exists
-	if err := promptForOverwrite(config); err != nil {
-		return err
-	}
-
-	// Clone to final location and update registries.json
-	if err := cloneRegistryToFinalLocation(config); err != nil {
-		return err
-	}
-
-	fmt.Printf("Cloned registry '%s' from %s\n", config.registry.Name, config.gitURL)
-	return nil
-}
-
-// parseCloneArgs validates the Git URL argument and initializes the config
-func parseCloneArgs(args []string) (*cloneRegistryConfig, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("exactly one argument required (e.g., cosm registry clone <giturl>)")
-	}
-	gitURL := args[0]
-	if gitURL == "" {
-		return nil, fmt.Errorf("git URL cannot be empty")
-	}
-
-	cosmDir, err := getCosmDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get cosm directory: %v", err)
-	}
-	registriesDir, err := getRegistriesDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get registries directory: %v", err)
-	}
-
-	return &cloneRegistryConfig{
-		gitURL:        gitURL,
-		cosmDir:       cosmDir,
-		registriesDir: registriesDir,
-	}, nil
-}
-
-// validateClonedRegistry clones to a temporary directory and validates registry.json
-func validateClonedRegistry(config *cloneRegistryConfig) error {
-	tmpDir, err := os.MkdirTemp("", "cosm-clone-")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary directory: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	if _, err := clone(config.gitURL, tmpDir); err != nil {
-		msg := fmt.Sprintf("failed to clone repository at '%s' to %s", config.gitURL, tmpDir)
-		return wrapGitError(filepath.Dir(tmpDir), msg, err)
-	}
-
-	registryMetaFile := filepath.Join(tmpDir, "registry.json")
-	data, err := os.ReadFile(registryMetaFile)
-	if err != nil {
-		return fmt.Errorf("failed to read %s from cloned repository: %v", registryMetaFile, err)
-	}
-	if err := json.Unmarshal(data, &config.registry); err != nil {
-		return fmt.Errorf("failed to parse %s: %v", registryMetaFile, err)
-	}
-	if config.registry.Name == "" {
-		return fmt.Errorf("%s does not contain a valid registry name", registryMetaFile)
-	}
-	config.registryPath = filepath.Join(config.registriesDir, config.registry.Name)
-	return nil
-}
-
-// promptForOverwrite prompts the user and deletes an existing registry if needed
-func promptForOverwrite(config *cloneRegistryConfig) error {
-	if contains(config.registryNames, config.registry.Name) {
-		fmt.Printf("Registry '%s' already exists. Overwrite? [y/N]: ", config.registry.Name)
-		scanner := bufio.NewScanner(os.Stdin)
-		scanner.Scan()
-		response := strings.TrimSpace(strings.ToLower(scanner.Text()))
-		if response != "y" && response != "yes" {
-			fmt.Println("Registry clone cancelled.")
-			return nil
-		}
-		// Delete existing registry (without --force to align with prompt)
-		deleteCmd := &cobra.Command{}
-		if err := RegistryDelete(deleteCmd, []string{config.registry.Name}); err != nil {
-			return fmt.Errorf("failed to delete existing registry '%s': %v", config.registry.Name, err)
+	for _, name := range registryNames {
+		if name == registryName {
+			return fmt.Errorf("registry '%s' already exists in registries.json", registryName)
 		}
 	}
 	return nil
 }
 
-// cloneRegistryToFinalLocation clones the registry to its final path and updates registries.json
-func cloneRegistryToFinalLocation(config *cloneRegistryConfig) error {
-	if _, err := clone(config.gitURL, config.registryPath); err != nil {
-		msg := fmt.Sprintf("failed to clone repository to '%s'", config.registryPath)
-		return wrapGitError(filepath.Dir(config.registryPath), msg, err)
+// moveTempToFinalRegistryDir moves the temporary directory to the final registry location
+func moveTempToFinalRegistryDir(tmpDir, finalDir string) error {
+	if err := os.MkdirAll(filepath.Dir(finalDir), 0755); err != nil {
+		return fmt.Errorf("failed to create parent directory for %s: %v", finalDir, err)
 	}
+	if err := os.Rename(tmpDir, finalDir); err != nil {
+		return fmt.Errorf("failed to move %s to %s: %v", tmpDir, finalDir, err)
+	}
+	return nil
+}
 
-	// Update registries.json
-	config.registryNames = append(config.registryNames, config.registry.Name)
-	if err := saveRegistryNames(config.registryNames, config.registriesDir); err != nil {
-		return err
+// addRegistryNameToJSON adds the registry name to registries.json
+func addRegistryNameToJSON(registriesDir, registryName string) error {
+	registryNames, err := loadRegistryNames(registriesDir)
+	if err != nil {
+		if !os.IsNotExist(err) && !strings.Contains(err.Error(), "no registries available") {
+			return fmt.Errorf("failed to load registry names: %v", err)
+		}
+		registryNames = []string{}
+	}
+	registryNames = append(registryNames, registryName)
+	if err := saveRegistryNames(registryNames, registriesDir); err != nil {
+		return fmt.Errorf("failed to update registries.json: %v", err)
 	}
 	return nil
 }

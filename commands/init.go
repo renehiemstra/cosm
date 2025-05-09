@@ -238,7 +238,7 @@ func copyTemplateFiles(templatePath, projectDir, templateName, packageName strin
 // initializeGitRepo initializes a git repository, adds all files, and commits
 func initializeGitRepo(projectDir string) error {
 	// Run git init
-	if _, err := gitCommand(projectDir, "init"); err != nil {
+	if _, err := GitCommand(projectDir, "init"); err != nil {
 		return fmt.Errorf("failed to initialize git repository in %s: %v", projectDir, err)
 	}
 

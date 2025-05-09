@@ -10,7 +10,7 @@ import (
 
 // getCurrentBranch retrieves the current branch name of the Git repository in the specified directory
 func getCurrentBranch(dir string) (string, error) {
-	output, err := gitCommand(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	output, err := GitCommand(dir, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return "", wrapGitError(dir, fmt.Sprintf("failed to get current branch in %s", dir), err)
 	}
@@ -26,7 +26,7 @@ func getCurrentBranch(dir string) (string, error) {
 
 // pullFromBranch pulls updates from the specified branch in the Git repository
 func pullFromBranch(dir, branch, context string) error {
-	if _, err := gitCommand(dir, "pull", "origin", branch); err != nil {
+	if _, err := GitCommand(dir, "pull", "origin", branch); err != nil {
 		return wrapGitError(dir, fmt.Sprintf("failed to pull updates from branch '%s' for %s", branch, context), err)
 	}
 	return nil
@@ -39,7 +39,7 @@ func wrapGitError(dir, msg string, err error) error {
 
 // pushToRemote pushes the specified target (branch or tag) to origin.
 func pushToRemote(dir, target string, ignoreUpToDate bool) error {
-	output, err := gitCommand(dir, "push", "origin", target)
+	output, err := GitCommand(dir, "push", "origin", target)
 	if err != nil && !(ignoreUpToDate && strings.Contains(output, "Everything up-to-date")) {
 		return fmt.Errorf("failed to push %s to origin in %s: %v", target, dir, err)
 	}
@@ -48,15 +48,15 @@ func pushToRemote(dir, target string, ignoreUpToDate bool) error {
 
 // fetchOrigin fetches updates from origin.
 func fetchOrigin(dir string) error {
-	if _, err := gitCommand(dir, "fetch", "origin"); err != nil {
+	if _, err := GitCommand(dir, "fetch", "origin"); err != nil {
 		return wrapGitError(dir, "failed to fetch from origin", err)
 	}
 	return nil
 }
 
-// gitCommand executes a Git command in the specified directory, returning the output and any error.
+// GitCommand executes a Git command in the specified directory, returning the output and any error.
 // The subcommand is the Git command (e.g., "add", "commit"), followed by its arguments.
-func gitCommand(dir, subcommand string, args ...string) (string, error) {
+func GitCommand(dir, subcommand string, args ...string) (string, error) {
 	if subcommand == "" {
 		return "", fmt.Errorf("no Git subcommand provided for directory %s", dir)
 	}
@@ -71,11 +71,11 @@ func gitCommand(dir, subcommand string, args ...string) (string, error) {
 // getGitAuthors retrieves the author info from git config or uses a default
 func getGitAuthors() ([]string, error) {
 	// Use empty directory for global/system-wide config
-	name, errName := gitCommand("", "config", "user.name")
+	name, errName := GitCommand("", "config", "user.name")
 	if errName != nil {
 		name = ""
 	}
-	email, errEmail := gitCommand("", "config", "user.email")
+	email, errEmail := GitCommand("", "config", "user.email")
 	if errEmail != nil {
 		email = ""
 	}
@@ -88,7 +88,7 @@ func getGitAuthors() ([]string, error) {
 
 // revertClone returns the clone to its previous branch or state using 'git checkout -'
 func revertClone(clonePath string) error {
-	_, err := gitCommand(clonePath, "checkout", "-")
+	_, err := GitCommand(clonePath, "checkout", "-")
 	return err
 }
 
@@ -97,7 +97,7 @@ func stageFiles(dir string, paths ...string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("no paths provided to stage in %s", dir)
 	}
-	_, err := gitCommand(dir, "add", paths...)
+	_, err := GitCommand(dir, "add", paths...)
 	if err != nil {
 		return wrapGitError(dir, "failed to stage changes", err)
 	}
@@ -106,7 +106,7 @@ func stageFiles(dir string, paths ...string) error {
 
 // commitChanges commits staged changes with the specified message.
 func commitChanges(dir, message string) error {
-	_, err := gitCommand(dir, "commit", "-m", message)
+	_, err := GitCommand(dir, "commit", "-m", message)
 	if err != nil {
 		return wrapGitError(dir, "failed to commit changes", err)
 	}
@@ -114,16 +114,16 @@ func commitChanges(dir, message string) error {
 }
 
 // clone clones a repository from gitURL to the destination directory.
-func clone(gitURL, destination string) (string, error) {
-	if _, err := gitCommand(filepath.Dir(destination), "clone", gitURL, destination); err != nil {
+func clone(gitURL, parentDir, destination string) (string, error) {
+	if _, err := GitCommand(parentDir, "clone", gitURL, destination); err != nil {
 		return "", fmt.Errorf("failed to clone repository from '%s' to %s: %v", gitURL, destination, err)
 	}
-	return destination, nil
+	return filepath.Join(parentDir, destination), nil
 }
 
 // listTags retrieves the list of tags in the Git repository
 func listTags(dir string) ([]string, error) {
-	output, err := gitCommand(dir, "tag")
+	output, err := GitCommand(dir, "tag")
 	if err != nil {
 		return nil, wrapGitError(dir, fmt.Sprintf("failed to list tags in %s", dir), err)
 	}
@@ -139,7 +139,7 @@ func createTag(dir, tag string) error {
 	if tag == "" {
 		return fmt.Errorf("tag name cannot be empty")
 	}
-	if _, err := gitCommand(dir, "tag", tag); err != nil {
+	if _, err := GitCommand(dir, "tag", tag); err != nil {
 		return wrapGitError(dir, fmt.Sprintf("failed to create tag '%s' in %s", tag, dir), err)
 	}
 	return nil
@@ -153,7 +153,7 @@ func checkoutVersion(clonePath, sha1 string) error {
 	}
 
 	// Checkout the specific SHA1
-	_, err := gitCommand(clonePath, "checkout", sha1)
+	_, err := GitCommand(clonePath, "checkout", sha1)
 	if err != nil {
 		return fmt.Errorf("failed to checkout SHA1 %s in %s: %v", sha1, clonePath, err)
 	}
@@ -162,7 +162,7 @@ func checkoutVersion(clonePath, sha1 string) error {
 
 // ensureNoUncommittedChanges checks for uncommitted changes in the Git repo
 func ensureNoUncommittedChanges(projectDir string) error {
-	output, err := gitCommand(projectDir, "status", "--porcelain")
+	output, err := GitCommand(projectDir, "status", "--porcelain")
 	if err != nil {
 		return wrapGitError(projectDir, "failed to check Git status", err)
 	}
@@ -186,7 +186,7 @@ func ensureLocalRepoInSyncWithOrigin(projectDir string) error {
 	}
 
 	// Check if local is behind origin
-	output, err := gitCommand(projectDir, "rev-list", "--count", fmt.Sprintf("HEAD..origin/%s", branch))
+	output, err := GitCommand(projectDir, "rev-list", "--count", fmt.Sprintf("HEAD..origin/%s", branch))
 	if err != nil {
 		return fmt.Errorf("failed to check sync with origin/%s in %s: %v", branch, projectDir, err)
 	}
@@ -237,7 +237,7 @@ func clonePackageToTempDir(cosmDir, packageGitURL string) (string, error) {
 		return "", fmt.Errorf("failed to create clones directory: %v", err)
 	}
 	tmpClonePath := filepath.Join(clonesDir, "tmp-clone")
-	if _, err := clone(packageGitURL, tmpClonePath); err != nil {
+	if _, err := clone(packageGitURL, clonesDir, "tmp-clone"); err != nil {
 		cleanupErr := cleanupTempClone(tmpClonePath)
 		if cleanupErr != nil {
 			return "", fmt.Errorf("failed to clone package repository at '%s': %v; cleanup failed: %v", packageGitURL, err, cleanupErr)
