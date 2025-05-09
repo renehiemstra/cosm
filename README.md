@@ -1,5 +1,5 @@
 # Cosm - package manager
-`Cosm` and its associated command-line-interface `cosm`, is a package manager and integrated package registry that is language agnostic. Support for new languages is implemented by writing a simple plugin. This makes `Cosm` ideally suited for multi-language projects.
+`Cosm` and its associated command-line-interface `cosm`, is a package manager and integrated package registry. It can effectively support multiple language by writing a simple plugin. This makes `Cosm` ideally suited for multi-language projects. 
 
 The design of `Cosm` is based on the following ideas
 * [Minimal version selection](https://research.swtch.com/vgo-mvs), leading to 100% reproducible builds without the need for a lockfile.
@@ -12,16 +12,20 @@ Currently the following languags are supported through plugins
 * [Lua](https://www.lua.org/)
 * [Terra](https://terralang.org/)
 
-Some of these ideas have been drawn from my experiences with the [Julia package manager](https://pkgdocs.julialang.org/v1/) and the excellent set of [blog posts](https://research.swtch.com/vgo) from Ross Cox on package management in Go. `Cosm` naturally features reproducible builds without the need for a lock file. Instead, the dependency tree is evaluated just in time based on a simple criterion. The result is a relatively simple core design that is language agnostic. Specific Language or build system support can be added via simple plugins.
+Some of these ideas have been drawn from my experiences with the [Julia package manager](https://pkgdocs.julialang.org/v1/) and the excellent set of [blog posts](https://research.swtch.com/vgo) from Ross Cox on package management in Go. `Cosm` naturally features reproducible builds without the need for a lock file. The result is a relatively simple core design that is language agnostic. Specific Language or build system support can be added via simple plugins.
 
 ## Installation
-Currently, `Cosm` depends on [Lua]() and bash. Simply download and run the `install.sh` script. Try the following to check that calling `cosm` is successful
+`Cosm` is implemented in go. Simply download and the binaries for your operating system and place them on your patch. Now try:
+```
+cosm
+```
+or
 ```
 cosm --version
 ```
 
 ## Versioning
-Consequent versioning is central to good package management. We follow the rules in [Semantic Versioning 2.0.0](https://semver.org/) and utilize the [semver.lua](https://github.com/kikito/semver.lua) library. In `cosm`, a specific instance of a package is uniquely defined by
+Robust versioning is central to good package management. We follow the rules in [Semantic Versioning 2.0.0](https://semver.org/). In `cosm`, a specific instance of a package is uniquely defined by
 ```
     <name>@v<major>.<minor>.<patch>-<prerelease>+<build>
 ```
@@ -50,11 +54,11 @@ cosm registry status <registry name>
 cosm init <package name>
 cosm init <package name> --language <language>
 ```
-*Evaluate in root directory of an existing project. A 'Project.lua' file is created for project package name and, optionally, language `<language>`, which defaults to Lua.*
+*Evaluate in root directory of an existing project. A 'Project.json' file is created for project package name and, optionally, language `<language>`
 ```
 cosm init <package name> --template <language/template>
 ```
-*Evaluate in parent folder of a new package. Adds a new package with name package name according to a template (in .cosm/lang). Currently, only a lua and terra template are implemented.*
+*Evaluate in parent folder of a new package. Adds a new package with name package name according to a template (in .cosm/lang). Currently, only a terra template is implemented.*
 
 ## Activate a package
 ```
@@ -106,40 +110,40 @@ cosm rm <name>
 ## Upgrade project dependencies
 You can upgrade any direct or transitive dependency separately using one of the following commands:
 ```
-cosm upgrade <name>
-cosm upgrade <name> v<x>
-cosm upgrade <name> v<x.y>
-cosm upgrade <name> v<x.y.z>
-cosm upgrade <name> v<x.y.z-alpha>
+cosm upgrade <name>                     (not implemented)
+cosm upgrade <name> v<x>                (not implemented)
+cosm upgrade <name> v<x.y>              (not implemented)
+cosm upgrade <name> v<x.y.z>            (not implemented)
+cosm upgrade <name> v<x.y.z-alpha>      (not implemented)
 ```
 *Evaluate in a package root. Upgrading is done conservatively, meaning that the latest compatible version is chosen by default that satisfies the provided constraint. For example,*
 ```
-cosm upgrade <name> v<x.y>
+cosm upgrade <name> v<x.y>              (not implemented)
 ```
 *Upgrades a package to version 'x.y.z' where z is the latest patch version in the series. If you want to upgrade to an exact version then you simply specify the constraint*
 ```
-cosm upgrade <name> v<x.y.z>
+cosm upgrade <name> v<x.y.z>            (not implemented)
 ```
 *The '--latest' option changes the default behavior and pickes the latest registered version of the package.*
 ```
-cosm upgrade <name> --latest
+cosm upgrade <name> --latest            (not implemented)
 ```
 *If you want to upgrade all direct and transitive project dependencies you can use one of the following commands.*
 ```
-cosm upgrade --all
-cosm upgrade --all --latest
+cosm upgrade --all                      (not implemented)
+cosm upgrade --all --latest             (not implemented)
 ```
 *By default, an upgrade seeks the latest compatible version. The `--latest` option is used to get the latest of each package, which may be incompatible with the current version you are using. The order of the options is not relevant.*
 
 ## Develop a project dependency
 Its possible to extend functionality or fix bugs in one of your managed dependencies and directly use it in your parent project without issuing new releases of your dependency. This is particularly useful at early development stages and simply works as follows
 ```
-cosm develop <package name>
+cosm develop <package name>             (not implemented)
 ```
 *Evaluate in a package root. Open a dependency to a project, but in development mode, which means it checks out a 'git clone' of the latest version of package name in `cosm/dev/<package name>@v<major>` that you can freely develop in. The changes are imediately available in your parent project.*
 
 ```
-cosm free <package name>
+cosm free <package name>                    (not implemented)
 ```
 *Evaluate in a package root. Close development mode and return to the latest release. If you brought out a new release of your development package, then you can directly start usign them.*
 
