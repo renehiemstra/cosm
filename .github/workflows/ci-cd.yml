@@ -48,9 +48,6 @@ jobs:
       matrix:
         goos: [linux, darwin]
         goarch: [amd64, arm64]
-        exclude:
-          - goos: linux
-            goarch: arm64  # Only linux-amd64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
