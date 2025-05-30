@@ -24,7 +24,7 @@ remote_add(){
     git remote add origin $DEPOT_PATH/localhub/$pkg &> /dev/null;
     git add . &> /dev/null;
     git commit -m "<dep> added dependencies" &> /dev/null;
-    git push --set-upstream origin main &> /dev/null;
+    git push --set-upstream origin master &> /dev/null;
     cd "$cwd"
 }
 
