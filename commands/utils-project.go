@@ -42,7 +42,22 @@ func MakePackageAvailable(cosmDir string, specs *types.Specs) error {
 		return nil
 	}
 
+	// check out clone if it does not yet exist
 	clonePath := filepath.Join(cosmDir, "clones", specs.UUID)
+	if _, err := os.Stat(clonePath); os.IsNotExist(err) {
+		tmpClonePath, err := clonePackageToTempDir(cosmDir, specs.GitURL)
+		if err != nil {
+			return err
+		}
+		defer cleanupTempClone(tmpClonePath)
+		clonePath, err = moveCloneToPermanentDir(cosmDir, tmpClonePath, specs.UUID)
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to check clone at %s: %v", clonePath, err)
+	}
+
 	if err := prepareClone(clonePath, specs.SHA1); err != nil {
 		return fmt.Errorf("failed to prepare clone for %s@%s: %v", specs.Name, specs.Version, err)
 	}
