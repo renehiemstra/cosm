@@ -315,6 +315,11 @@ func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL s
 				return fmt.Errorf("invalid Project.json for tag '%s': %v", tag, err)
 			}
 
+			// Validate version and tag
+			if project.Version != tag {
+				return fmt.Errorf("Project version and git tag do not match")
+			}
+
 			// Revert clone to previous state
 			if err := revertClone(clonePath); err != nil {
 				return fmt.Errorf("failed to revert clone for tag '%s': %v", tag, err)
@@ -328,7 +333,7 @@ func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL s
 			sha1 := strings.TrimSpace(sha1Output)
 
 			// Add the version using the project data for this tag
-			if err := addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, sha1, tag, project, registriesDir); err != nil {
+			if err := addPackageVersion(packageDir, project, packageGitURL, sha1, registriesDir); err != nil {
 				return err
 			}
 
@@ -349,40 +354,41 @@ func updatePackageVersions(packageDir, packageName, packageUUID, packageGitURL s
 }
 
 // addPackageVersion adds a single version to the registry package directory
-func addPackageVersion(packageDir, packageName, packageUUID, packageGitURL, sha1, versionTag string, project *types.Project, registriesDir string) error {
-	versionDir := filepath.Join(packageDir, versionTag)
+func addPackageVersion(packageDir string, project *types.Project, packageGitURL, sha1, registriesDir string) error {
+	versionDir := filepath.Join(packageDir, project.Version)
 	if err := os.MkdirAll(versionDir, 0755); err != nil {
 		return fmt.Errorf("failed to create version directory %s: %v", versionDir, err)
 	}
 
 	specs := types.Specs{
-		Name:    packageName,
-		UUID:    packageUUID,
-		Version: versionTag,
-		GitURL:  packageGitURL,
-		SHA1:    sha1,
-		Deps:    project.Deps,
+		Name:     project.Name,
+		UUID:     project.UUID,
+		Language: project.Language,
+		Version:  project.Version,
+		GitURL:   packageGitURL,
+		SHA1:     sha1,
+		Deps:     project.Deps,
 	}
 	data, err := json.MarshalIndent(specs, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal specs.json for version '%s': %v", versionTag, err)
+		return fmt.Errorf("failed to marshal specs.json for version '%s': %v", project.Version, err)
 	}
 	specsFile := filepath.Join(versionDir, "specs.json")
 	if err := os.WriteFile(specsFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write specs.json for version '%s': %v", versionTag, err)
+		return fmt.Errorf("failed to write specs.json for version '%s': %v", project.Version, err)
 	}
 
 	buildList, err := generateBuildList(project, registriesDir)
 	if err != nil {
-		return fmt.Errorf("failed to generate build list for version '%s': %v", versionTag, err)
+		return fmt.Errorf("failed to generate build list for version '%s': %v", project.Version, err)
 	}
 	data, err = json.MarshalIndent(buildList, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal buildlist.json for version '%s': %v", versionTag, err)
+		return fmt.Errorf("failed to marshal buildlist.json for version '%s': %v", project.Version, err)
 	}
 	buildListFile := filepath.Join(versionDir, "buildlist.json")
 	if err := os.WriteFile(buildListFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write buildlist.json for version '%s': %v", versionTag, err)
+		return fmt.Errorf("failed to write buildlist.json for version '%s': %v", project.Version, err)
 	}
 	return nil
 }

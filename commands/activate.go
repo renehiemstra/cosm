@@ -169,19 +169,26 @@ func createEnvironmentFiles() error {
 
 // generateEnvironmentVariables creates the .cosm/.env file with environment variables
 func generateEnvironmentVariables(cosmDir string, buildList *types.BuildList) error {
-	// Construct TERRA_PATH
+	// Construct TERRA_PATH and LUA_PATH
 	var terraPaths []string
 	terraPaths = append(terraPaths, "src/?.t")
+	var luaPaths []string
+	luaPaths = append(luaPaths, "src/?.lua")
 	for _, dep := range buildList.Dependencies {
-		if dep.Path != "" {
+		if dep.Language == "terra" {
 			pathVar := filepath.Join(cosmDir, dep.Path, "src", "?.t")
 			terraPaths = append(terraPaths, pathVar)
 		}
+		if dep.Language == "lua" {
+			pathVar := filepath.Join(cosmDir, dep.Path, "src", "?.lua")
+			luaPaths = append(luaPaths, pathVar)
+		}
 	}
 	terraPathValue := strings.Join(terraPaths, ";") + ";;"
+	luaPathValue := strings.Join(luaPaths, ";") + ";;"
 
 	// Write to .cosm/.env
-	envContent := fmt.Sprintf("export TERRA_PATH=%q\n", terraPathValue)
+	envContent := fmt.Sprintf("export TERRA_PATH=%q\nexport LUA_PATH=%q\n", terraPathValue, luaPathValue)
 	envFile := filepath.Join(".", ".cosm", ".env")
 	if err := os.WriteFile(envFile, []byte(envContent), 0644); err != nil {
 		return fmt.Errorf("failed to write .cosm/.env: %v", err)

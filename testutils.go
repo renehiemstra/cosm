@@ -72,6 +72,43 @@ func initPackage(t *testing.T, tempDir, packageName string, version ...string) s
 	return packageDir
 }
 
+// initPackage initializes a package with cosm init and verifies the result
+func initPackageFromTemplate(t *testing.T, tempDir, packageName, language string, version ...string) string {
+	t.Helper()
+	packageDir := filepath.Join(tempDir, packageName)
+
+	// Run cosm init with optional version
+	args := []string{"init", packageName, "--template", language + "/PkgTemplate"}
+	if len(version) > 0 {
+		args = append(args, version[0])
+	}
+	stdout, stderr, err := runCommand(t, tempDir, args...)
+	if err != nil {
+		t.Fatalf("Command failed: %v\nStderr: %s", err, stderr)
+	}
+
+	// Determine expected version
+	expectedVersion := "v0.1.0"
+	if len(version) > 0 {
+		expectedVersion = version[0]
+	}
+	expectedOutput := fmt.Sprintf("Initialized project '%s' with version %s in %s\n", packageName, expectedVersion, packageName)
+	if stdout != expectedOutput {
+		t.Errorf("Expected output %q, got %q\nStderr: %s", expectedOutput, stdout, stderr)
+	}
+
+	// Verify Project.json
+	expectedProject := types.Project{
+		Name:     packageName,
+		Authors:  []string{"[testuser]testuser@git.com"},
+		Language: language,
+		Version:  expectedVersion,
+	}
+	checkProjectFile(t, filepath.Join(packageDir, "Project.json"), expectedProject)
+
+	return packageDir
+}
+
 // setupPackageWithGit creates a package with a Git remote and a specified version
 func setupPackageWithGit(t *testing.T, tempDir, packageName, version string) (string, string) {
 	t.Helper()

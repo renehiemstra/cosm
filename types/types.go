@@ -38,12 +38,13 @@ type Project struct {
 
 // Specs represents the metadata for a package version
 type Specs struct {
-	Name    string                `json:"name"`
-	UUID    string                `json:"uuid"`
-	Version string                `json:"version"`
-	GitURL  string                `json:"giturl"`
-	SHA1    string                `json:"sha1"`
-	Deps    map[string]Dependency `json:"deps"`
+	Name     string                `json:"name"`
+	UUID     string                `json:"uuid"`
+	Language string                `json:"language"`
+	Version  string                `json:"version"`
+	GitURL   string                `json:"giturl"`
+	SHA1     string                `json:"sha1"`
+	Deps     map[string]Dependency `json:"deps"`
 }
 
 // BuildList represents the minimum version dependencies for a package version
@@ -53,10 +54,11 @@ type BuildList struct {
 
 // BuildListDependency represents a single dependency in the build list
 type BuildListDependency struct {
-	Name    string `json:"name"`
-	UUID    string `json:"uuid"`
-	Version string `json:"version"`
-	GitURL  string `json:"giturl"`
-	SHA1    string `json:"sha1"`
-	Path    string `json:"path"`
+	Name     string `json:"name"`
+	UUID     string `json:"uuid"`
+	Language string `json:"language,omitempty"`
+	Version  string `json:"version"`
+	GitURL   string `json:"giturl"`
+	SHA1     string `json:"sha1"`
+	Path     string `json:"path"`
 }

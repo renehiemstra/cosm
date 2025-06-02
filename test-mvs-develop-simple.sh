@@ -42,12 +42,7 @@ add_commit_push(){
 add_pkg_with_git(){
     cwd=$PWD
     pkg=$1
-    mkdir "$DEPOT_PATH/examples/$pkg" &> /dev/null;
-    cd "$DEPOT_PATH/examples/$pkg"
-    git init &> /dev/null;
-    cosm init $pkg &> /dev/null;
-    git add . &> /dev/null;
-    git commit -m "<wip>" &> /dev/null;
+    cosm init $pkg --template lua/PkgTemplate &> /dev/null;
     remote_add $pkg &> /dev/null;
     cd "$cwd"
 }

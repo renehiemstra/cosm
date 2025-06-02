@@ -81,6 +81,10 @@ func TestInit(t *testing.T) {
 	// Test 2: Specific version (v1.0.0)
 	packageName2 := "myproject2"
 	initPackage(t, tempDir, packageName2, "v1.0.0")
+
+	// Test 3: initialize a package from a template
+	packageName3 := "myproject3"
+	initPackageFromTemplate(t, tempDir, packageName3, "terra")
 }
 
 func TestInitDuplicate(t *testing.T) {

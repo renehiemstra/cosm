@@ -22,7 +22,7 @@ func generateBuildList(project *types.Project, registriesDir string) (types.Buil
 		if err != nil {
 			return types.BuildList{}, err
 		}
-		key, entry, err := createDependencyEntry(dep.Name, dep.Version, depUUID, specs)
+		key, entry, err := createDependencyEntry(specs)
 		if err != nil {
 			return types.BuildList{}, err
 		}
@@ -83,19 +83,20 @@ func findDependency(depName, depVersion, depUUID, registriesDir string) (types.S
 }
 
 // createDependencyEntry builds a BuildListDependency entry with its key
-func createDependencyEntry(depName, depVersion, depUUID string, specs types.Specs) (string, types.BuildListDependency, error) {
-	majorVersion, err := GetMajorVersion(depVersion)
+func createDependencyEntry(specs types.Specs) (string, types.BuildListDependency, error) {
+	majorVersion, err := GetMajorVersion(specs.Version)
 	if err != nil {
-		return "", types.BuildListDependency{}, fmt.Errorf("failed to get major version for '%s@%s': %v", depName, depVersion, err)
+		return "", types.BuildListDependency{}, fmt.Errorf("failed to get major version for '%s@%s': %v", specs.Name, specs.Version, err)
 	}
-	key := fmt.Sprintf("%s@%s", depUUID, majorVersion)
+	key := fmt.Sprintf("%s@%s", specs.UUID, majorVersion)
 	entry := types.BuildListDependency{
-		Name:    depName,
-		UUID:    depUUID,
-		Version: depVersion,
-		GitURL:  specs.GitURL,
-		SHA1:    specs.SHA1,
-		Path:    fmt.Sprintf("packages/%s/%s", depName, specs.SHA1),
+		Name:     specs.Name,
+		UUID:     specs.UUID,
+		Language: specs.Language,
+		Version:  specs.Version,
+		GitURL:   specs.GitURL,
+		SHA1:     specs.SHA1,
+		Path:     fmt.Sprintf("packages/%s/%s", specs.Name, specs.SHA1),
 	}
 	return key, entry, nil
 }
