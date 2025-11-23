@@ -169,19 +169,36 @@ func createEnvironmentFiles() error {
 
 // generateEnvironmentVariables creates the .cosm/.env file with environment variables
 func generateEnvironmentVariables(cosmDir string, buildList *types.BuildList) error {
+
 	// Construct TERRA_PATH
-	var terraPaths []string
+	var terraPaths, luaPaths []string
 	terraPaths = append(terraPaths, "src/?.t")
+	luaPaths = append(luaPaths, "src/?.lua")
+
+	// Add direct subfolders of "src"
+	srcDir := "src"
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("failed to read src dir: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			terraPaths = append(terraPaths, filepath.Join(srcDir, entry.Name(), "?.t"))
+			luaPaths = append(luaPaths, filepath.Join(srcDir, entry.Name(), "?.lua"))
+		}
+	}
+
 	for _, dep := range buildList.Dependencies {
 		if dep.Path != "" {
-			pathVar := filepath.Join(cosmDir, dep.Path, "src", "?.t")
-			terraPaths = append(terraPaths, pathVar)
+			terraPaths = append(terraPaths, filepath.Join(cosmDir, dep.Path, "src", "?.t"))
+			luaPaths = append(luaPaths, filepath.Join(cosmDir, dep.Path, "src", "?.lua"))
 		}
 	}
 	terraPathValue := strings.Join(terraPaths, ";") + ";;"
+	luaPathValue := strings.Join(luaPaths, ";") + ";;"
 
 	// Write to .cosm/.env
-	envContent := fmt.Sprintf("export TERRA_PATH=%q\n", terraPathValue)
+	envContent := fmt.Sprintf("export TERRA_PATH=%q\nexport LUA_PATH=%q\n", terraPathValue, luaPathValue)
 	envFile := filepath.Join(".", ".cosm", ".env")
 	if err := os.WriteFile(envFile, []byte(envContent), 0644); err != nil {
 		return fmt.Errorf("failed to write .cosm/.env: %v", err)

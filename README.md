@@ -169,7 +169,7 @@ cosm release --major
 ## Register a project to a registry
 Once you have published one or more releases to your remote repository, you can add them to a registry as follows
 ```
-cosm registry add <registry name> v<version tag> <giturl>
+cosm registry add <registry name> <giturl>
 ```
 *Can be evaluated anywhere. Register a package version to a registry (in .cosm/registries). An error is thrown if the current version already exists in the registry. The remote repository of the registry is updated automatically.*
 
