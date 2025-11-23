@@ -84,6 +84,12 @@ func setupPackageWithGit(t *testing.T, tempDir, packageName, version string) (st
 	if _, err := os.Stat(projectFile); os.IsNotExist(err) {
 		t.Fatalf("Project.json not found in %s", packageDir)
 	}
+	// Create src directory
+	srcDir := filepath.Join(packageDir, "src")
+	if err := os.Mkdir(srcDir, 0755); err != nil {
+		t.Fatalf("Failed to create src dir in %s: %v", packageDir, err)
+	}
+	// Add project to git
 	if err := exec.Command("git", "init").Run(); err != nil {
 		t.Fatalf("Failed to init Git repo for %s: %v", packageName, err)
 	}
