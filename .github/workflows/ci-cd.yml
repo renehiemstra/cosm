@@ -130,6 +130,7 @@ jobs:
         with:
           files: |
             artifacts/cosm-linux-amd64.tar.gz
+            artifacts/cosm-linux-arm64.tar.gz
             artifacts/cosm-darwin-amd64.zip
             artifacts/cosm-darwin-arm64.zip
           draft: false
