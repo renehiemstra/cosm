@@ -4,6 +4,7 @@ import (
 	"cosm/types"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -29,7 +30,7 @@ func selectPackageFromResults(packageName, versionTag string, foundPackages []ty
 	return promptUserForRegistry(packageName, versionTag, foundPackages)
 }
 
-// MakePackageAvailable copies the contents of a cloned package for a specific version
+// MakePackageAvailable copies the contents of a cloned and build package for a specific version
 // from ~/.cosm/clones/<UUID> to ~/.cosm/packages/<packageName>/<SHA1>, excluding Git-related files,
 // and ensures the clone is reverted to its previous state even on error.
 func MakePackageAvailable(cosmDir string, specs *types.Specs) error {
@@ -60,6 +61,21 @@ func MakePackageAvailable(cosmDir string, specs *types.Specs) error {
 
 	if err := prepareClone(clonePath, specs.SHA1); err != nil {
 		return fmt.Errorf("failed to prepare clone for %s@%s: %v", specs.Name, specs.Version, err)
+	}
+
+	// Build the package if a Makefile exists
+	makefilePath := filepath.Join(clonePath, "Makefile")
+	if _, err := os.Stat(makefilePath); err == nil {
+		cmd := exec.Command("make")
+		cmd.Dir = clonePath
+		cmd.Stdout = os.Stdout // Optional: pipe output for visibility
+		cmd.Stderr = os.Stderr // Optional: pipe errors for visibility
+		if err := cmd.Run(); err != nil {
+			if revertErr := revertClone(clonePath); revertErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to revert clone after build error: %v\n", revertErr)
+			}
+			return fmt.Errorf("failed to build package %s@%s: %v", specs.Name, specs.Version, err)
+		}
 	}
 
 	if err := copyPackageFiles(clonePath, destPath); err != nil {
